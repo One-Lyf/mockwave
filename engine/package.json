@@ -1,0 +1,19 @@
+{
+  "name": "@mockwave/engine",
+  "version": "0.0.1",
+  "description": "Mockwave core engine - deterministic data mocking with copy-as-code pattern",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "dependencies": {
+    "@onelyf/schema": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  },
+  "license": "MIT"
+}
