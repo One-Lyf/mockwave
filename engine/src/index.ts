@@ -5,3 +5,4 @@
 export * from './types';
 export * from './mockGenerator';
 export * from './codeImport';
+export * from './graphqlImport';

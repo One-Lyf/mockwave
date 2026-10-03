@@ -94,7 +94,7 @@ export const mockUser: User = {
 | Plain JSON | `{ id: 123, name: ... }` | Supported |
 | Zod Schema | `z.object({ ... })` | Planned |
 | Yup Schema | `yup.object({ ... })` | Planned |
-| GraphQL | `type User { ... }` | Planned |
+| GraphQL SDL | `type User { id: ID! }` | Supported |
 
 ## Features
 
@@ -109,6 +109,7 @@ export const mockUser: User = {
 - Format support: UUID, email, URL, phone, address, name, etc.
 - Array support: Configurable length and item types
 - Optional fields: Randomly included based on probability
+- Seeded runs: the same `seed` option always produces identical output
 
 ### Copy-as-Code
 - Generate mock data in your original format
@@ -118,8 +119,7 @@ export const mockUser: User = {
 ### Coming Soon
 - Patched source output (original schema with mock values inline)
 - Unified diff output
-- Seed-based reproducibility
-- More schema formats (Zod, Yup, GraphQL)
+- More schema formats (Zod, Yup)
 - Custom mock generators
 - Team collaboration
 

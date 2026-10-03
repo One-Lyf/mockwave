@@ -24,6 +24,7 @@ export interface MockConfig {
 export type MockDefinition =
   | MockObjectDefinition
   | MockArrayDefinition
+  | MockRecordDefinition
   | MockPrimitiveDefinition;
 
 /**
@@ -51,12 +52,28 @@ export interface MockArrayDefinition {
 }
 
 /**
+ * Definition for a map type (TypeScript `Record<string, V>`): an object with a few
+ * generated keys, each holding a value generated from `valueType`.
+ */
+export interface MockRecordDefinition {
+  type: 'record';
+  /** Mock configuration for every value */
+  valueType: MockDefinition;
+  /** Shape of the generated keys (default 'string') */
+  keyType?: 'string' | 'number';
+  /** How many keys to generate (default 3, capped at 20) */
+  keyCount?: number;
+}
+
+/**
  * Definition for a primitive type.
  */
 export interface MockPrimitiveDefinition {
   type: 'string' | 'number' | 'boolean' | 'date' | 'null' | 'any';
   /** Default value for this primitive */
   default?: unknown;
+  /** Allowed values (e.g. a GraphQL enum); one is picked per generated value */
+  enum?: unknown[];
   /** For strings: format (uuid, email, url, etc.) */
   format?: string;
   /** For strings: min length */
@@ -143,8 +160,10 @@ export interface GeneratedMock {
  * Options for mock generation.
  */
 export interface MockOptions {
-  /** Seed for reproducible randomness */
+  /** Seed for reproducible randomness: the same seed yields identical data. Omit for random output. */
   seed?: string | number;
+  /** Anchor for relative dates (default: now; a fixed 2026-01-01 UTC epoch when `seed` is set, so seeded output stays reproducible) */
+  referenceDate?: string | Date;
   /** Number of items to generate (for arrays) */
   count?: number;
   /** Whether to include null/undefined values */
