@@ -70,7 +70,6 @@ function generateMockObject(
   depth: number
 ): Record<string, unknown> {
   const obj: Record<string, unknown> = {};
-  const seed = options.seed !== undefined ? String(options.seed) : Math.random().toString();
   
   for (const [fieldName, propDef] of Object.entries(definition.properties)) {
     // Handle optional fields with probability
@@ -181,7 +180,7 @@ function generateMockPrimitive(
  */
 function generateMockString(
   definition: MockPrimitiveDefinition,
-  options: MockOptions
+  _options: MockOptions
 ): string {
   // Handle specific formats
   if (definition.format) {
@@ -231,7 +230,7 @@ function generateMockString(
  */
 function generateMockNumber(
   definition: MockPrimitiveDefinition,
-  options: MockOptions
+  _options: MockOptions
 ): number {
   let value: number;
   
@@ -245,9 +244,10 @@ function generateMockNumber(
     value = Math.random() * (max - min) + min;
   }
   
-  // Round to reasonable precision
-  if (!definition.integer && !definition.precision) {
-    value = Math.round(value * 100) / 100;
+  // Round non-integers to the requested decimal places (default 2)
+  if (!definition.integer) {
+    const factor = 10 ** (definition.precision ?? 2);
+    value = Math.round(value * factor) / factor;
   }
   
   return value;
