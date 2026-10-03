@@ -230,7 +230,7 @@ function generateMockString(
  */
 function generateMockNumber(
   definition: MockPrimitiveDefinition,
-  _options: MockOptions
+  options: MockOptions
 ): number {
   let value: number;
   
@@ -244,9 +244,13 @@ function generateMockNumber(
     value = Math.random() * (max - min) + min;
   }
   
-  // Round non-integers to the requested decimal places (default 2)
+  // Round non-integers to the requested decimal places: per-field, else the
+  // generation-wide numberOptions.precision, else 2. Clamped to [0, 15] (beyond 15
+  // the factor overflows double precision; negatives/NaN would corrupt the value).
   if (!definition.integer) {
-    const factor = 10 ** (definition.precision ?? 2);
+    const requested = definition.precision ?? options.numberOptions?.precision ?? 2;
+    const places = Number.isFinite(requested) ? Math.min(15, Math.max(0, Math.round(requested))) : 2;
+    const factor = 10 ** places;
     value = Math.round(value * factor) / factor;
   }
   

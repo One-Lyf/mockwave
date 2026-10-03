@@ -75,26 +75,22 @@ export interface SchemaImport {
  */
 export function parseTypeScriptSchema(code: string): SchemaImport | null {
   const src = code ?? '';
-  
-  // Try to extract interface or type definition
-  // `interface Name {` or `type Name = {` (generics/extends allowed), then the brace-matched body
-  const head = /(interface|type)\s+(\w+)[^{=;]*(?:=\s*)?\{/.exec(src);
+  // Comments blanked to same-length whitespace, so offsets (spans) still index `src`.
+  const clean = blankComments(src);
+
+  // `interface Name {` or `type Name = {` (generics/extends allowed), declared at the
+  // start of a line and on one line, so a "type foo" in prose or a JSON string can't match.
+  const head = /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(interface|type)\s+(\w+)[^{=;\n]*(?:=\s*)?\{/m.exec(clean);
   if (!head) return null;
-  
+
   const [, keyword, typeName] = head;
   const open = head.index + head[0].length;
-  let depth = 1;
-  let close = open;
-  while (close < src.length && depth > 0) {
-    if (src[close] === '{') depth++;
-    else if (src[close] === '}') depth--;
-    if (depth > 0) close++;
-  }
-  if (depth !== 0) return null;
-  const body = src.slice(open, close);
+  const close = matchBrace(clean, open);
+  if (close < 0) return null;
+  const body = clean.slice(open, close);
   const schemaType: SchemaType = keyword === 'interface' ? 'typescript-interface' : 'typescript-type';
-  
-  const { properties, spans, recognized, unrecognized } = parseTypeScriptBody(body, typeName);
+
+  const { properties, spans, recognized, unrecognized } = parseTypeScriptBody(body, typeName, open, '');
   
   return {
     config: {
@@ -172,7 +168,7 @@ export function parseJSONData(code: string): SchemaImport | null {
       source: src,
       schemaType: 'json',
       recognized: root.type === 'object' ? Object.keys(root.properties) : [],
-      unrecognized: [],
+      unrecognized: root.type === 'object' && Object.prototype.hasOwnProperty.call(data, UNSAFE_KEY) ? [UNSAFE_KEY] : [],
     };
   } catch {
     return null;
@@ -205,7 +201,34 @@ export function parseSchema(code: string): SchemaImport | null {
 
 // -- Helper functions -------------------------------------------------------
 
-function parseTypeScriptBody(body: string, parentPath: string): {
+/** Keys never written into a config map (would hit Object.prototype's setter). */
+const UNSAFE_KEY = '__proto__';
+
+/** Replace // and block comments with spaces (newlines kept), skipping string literals,
+ *  so the result has the same length and offsets as the input. */
+function blankComments(src: string): string {
+  return src.replace(
+    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    (m: string, str?: string) => (str ? m : m.replace(/[^\n]/g, ' ')),
+  );
+}
+
+/** Given `open` just past a `{`, return the index of its matching `}` (or -1). */
+function matchBrace(text: string, open: number): number {
+  let depth = 1;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Parse the fields of a brace body. `bodyOffset` is where `body` starts in the original
+ * source (so spans are absolute); `relPath` is the dotted path from the root type, used
+ * for the recognized/unrecognized lists (top-level fields are bare names).
+ */
+function parseTypeScriptBody(body: string, parentPath: string, bodyOffset: number, relPath: string): {
   properties: Record<string, MockPropertyDefinition>;
   spans: ValueSpan[];
   recognized: string[];
@@ -215,18 +238,48 @@ function parseTypeScriptBody(body: string, parentPath: string): {
   const spans: ValueSpan[] = [];
   const recognized: string[] = [];
   const unrecognized: string[] = [];
-  
-  // Simple field parser: looks for `field: Type` or `field?: Type`
-  const fieldRegex = /(\w+)\s*(\?)?\s*:\s*([^;,\n{}]+)/g;
+
+  // Field parser: `field: Type` or `field?: Type`, or `field: {` opening a nested object type
+  const fieldRegex = /(\w+)\s*(\?)?\s*:\s*([^;,\n{}]+|\{)/g;
   let match;
-  
+
   while ((match = fieldRegex.exec(body)) !== null) {
     const [, fieldName, isOptional, typeDef] = match;
     const fullFieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-    
-    // Parse the type definition
-    const { definition, spanStart, spanEnd, quote } = parseTypeScriptType(typeDef, match.index);
-    
+    const listName = relPath ? `${relPath}.${fieldName}` : fieldName;
+    const matchEnd = match.index + match[0].length;
+
+    if (typeDef === '{' || body[matchEnd] === '{') {
+      // Inline object type: brace-match it so its fields don't leak into this level.
+      const open = matchEnd + (typeDef === '{' ? 0 : 1);
+      const close = matchBrace(body, open);
+      if (close < 0) { unrecognized.push(listName); break; }
+      fieldRegex.lastIndex = close + 1;
+      if (typeDef !== '{' || fieldName === UNSAFE_KEY) {
+        // e.g. `x: Array<{ a: string }>`: a generic wrapping an object; skip it whole
+        unrecognized.push(listName);
+        continue;
+      }
+      const inner = parseTypeScriptBody(body.slice(open, close), fullFieldPath, bodyOffset + open, listName);
+      let mock: MockDefinition = { type: 'object', properties: inner.properties };
+      const arr = /^\s*\[\]/.exec(body.slice(close + 1));
+      if (arr) {
+        mock = { type: 'array', itemType: mock };
+        fieldRegex.lastIndex = close + 1 + arr[0].length;
+      }
+      properties[fieldName] = { mock, optional: !!isOptional };
+      spans.push(...inner.spans);
+      recognized.push(listName, ...inner.recognized);
+      unrecognized.push(...inner.unrecognized);
+      continue;
+    }
+
+    if (fieldName === UNSAFE_KEY) { unrecognized.push(listName); continue; }
+
+    // Parse the type definition (typeDef starts right after `:\s*`, so its offset is exact)
+    const typeOffset = bodyOffset + matchEnd - typeDef.length;
+    const { definition, spanStart, spanEnd, quote } = parseTypeScriptType(typeDef, typeOffset);
+
     if (definition) {
       properties[fieldName] = { mock: definition, optional: !!isOptional };
       
@@ -237,10 +290,10 @@ function parseTypeScriptBody(body: string, parentPath: string): {
         end: spanEnd,
         quote,
       });
-      
-      recognized.push(fieldName);
+
+      recognized.push(listName);
     } else {
-      unrecognized.push(fieldName);
+      unrecognized.push(listName);
     }
   }
   
@@ -332,6 +385,7 @@ function parseJSONSchemaProperties(
   const unrecognized: string[] = [];
   
   for (const [fieldName, schema] of Object.entries(properties)) {
+    if (fieldName === UNSAFE_KEY) { unrecognized.push(fieldName); continue; }
     const definition = jsonSchemaToDefinition(schema);
     
     if (definition) {
@@ -363,6 +417,7 @@ function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | nu
       const required = Array.isArray(node.required) ? (node.required as string[]) : [];
       const properties: Record<string, MockPropertyDefinition> = {};
       for (const [key, child] of Object.entries(props)) {
+        if (key === UNSAFE_KEY) continue;
         const mock = jsonSchemaToDefinition(child, depth + 1);
         if (mock) properties[key] = { mock, optional: !required.includes(key) };
       }
@@ -407,6 +462,7 @@ function buildMockConfigFromValue(value: unknown, depth = 0): MockDefinition {
   if (value && typeof value === 'object') {
     const properties: Record<string, MockPropertyDefinition> = {};
     for (const [key, val] of Object.entries(value)) {
+      if (key === UNSAFE_KEY) continue;
       properties[key] = { mock: buildMockConfigFromValue(val, depth + 1) };
     }
     return { type: 'object', properties };
