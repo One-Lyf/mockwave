@@ -14,7 +14,7 @@
  * Pattern mirrors Rackwave's parseWebAudioSnippet -> patchCode -> unifiedDiff flow.
  */
 
-import type { MockConfig, MockValueSpan, MockImport } from './types';
+import type { MockConfig, MockDefinition, MockPrimitiveDefinition, MockPropertyDefinition } from './types';
 
 /** A mockable value located in the pasted schema, with its exact text span so
  *  patchCode() can rewrite it in place. */
@@ -75,21 +75,28 @@ export interface SchemaImport {
  */
 export function parseTypeScriptSchema(code: string): SchemaImport | null {
   const src = code ?? '';
-  
-  // Try to extract interface or type definition
-  const interfaceMatch = /(interface|type)\s+(\w+)\s*[=:]\s*([\s\S]*?)(?=\n(?:export\s+)?(?:interface|type|class|function|const|let|var|}|;)|$)/.exec(src);
-  if (!interfaceMatch) return null;
-  
-  const [, keyword, typeName, body] = interfaceMatch;
+  // Comments blanked to same-length whitespace, so offsets (spans) still index `src`.
+  const clean = blankComments(src);
+
+  // `interface Name {` or `type Name = {` (generics/extends allowed), declared at the
+  // start of a line and on one line, so a "type foo" in prose or a JSON string can't match.
+  const head = /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(interface|type)\s+(\w+)[^{=;\n]*(?:=\s*)?\{/m.exec(clean);
+  if (!head) return null;
+
+  const [, keyword, typeName] = head;
+  const open = head.index + head[0].length;
+  const close = matchBrace(clean, open);
+  if (close < 0) return null;
+  const body = clean.slice(open, close);
   const schemaType: SchemaType = keyword === 'interface' ? 'typescript-interface' : 'typescript-type';
-  
-  const { config, spans, recognized, unrecognized } = parseTypeScriptBody(body, typeName, []);
+
+  const { properties, spans, recognized, unrecognized } = parseTypeScriptBody(body, typeName, open, '');
   
   return {
     config: {
       type: schemaType,
       name: typeName,
-      root: config,
+      root: { type: 'object', properties },
     },
     spans,
     source: src,
@@ -111,9 +118,9 @@ export function parseJSONSchema(code: string): SchemaImport | null {
     const schema = JSON.parse(src);
     if (!schema || typeof schema !== 'object' || !schema.properties) return null;
     
-    const { config, spans, recognized, unrecognized } = parseJSONSchemaProperties(
+    const { properties, spans, recognized, unrecognized } = parseJSONSchemaProperties(
       schema.properties,
-      '',
+      Array.isArray(schema.required) ? schema.required : [],
       []
     );
     
@@ -123,7 +130,7 @@ export function parseJSONSchema(code: string): SchemaImport | null {
         name: schema.title || 'Schema',
         root: {
           type: 'object',
-          properties: config,
+          properties,
         },
       },
       spans,
@@ -148,19 +155,20 @@ export function parseJSONData(code: string): SchemaImport | null {
     const data = JSON.parse(src);
     if (!data || typeof data !== 'object') return null;
     
-    const { config, spans } = buildMockConfigFromValue(data, '', []);
+    const root = buildMockConfigFromValue(data);
+    const spans: ValueSpan[] = [];
     
     return {
       config: {
         type: 'json',
         name: 'Data',
-        root: config,
+        root,
       },
       spans,
       source: src,
       schemaType: 'json',
-      recognized: Object.keys(config.properties || {}),
-      unrecognized: [],
+      recognized: root.type === 'object' ? Object.keys(root.properties) : [],
+      unrecognized: root.type === 'object' && Object.prototype.hasOwnProperty.call(data, UNSAFE_KEY) ? [UNSAFE_KEY] : [],
     };
   } catch {
     return null;
@@ -193,35 +201,87 @@ export function parseSchema(code: string): SchemaImport | null {
 
 // -- Helper functions -------------------------------------------------------
 
-function parseTypeScriptBody(body: string, parentPath: string, parentFields: string[]): {
-  config: Record<string, unknown>;
+/** Keys never written into a config map (would hit Object.prototype's setter). */
+const UNSAFE_KEY = '__proto__';
+
+/** Replace // and block comments with spaces (newlines kept), skipping string literals,
+ *  so the result has the same length and offsets as the input. */
+function blankComments(src: string): string {
+  return src.replace(
+    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
+    (m: string, str?: string) => (str ? m : m.replace(/[^\n]/g, ' ')),
+  );
+}
+
+/** Given `open` just past a `{`, return the index of its matching `}` (or -1). */
+function matchBrace(text: string, open: number): number {
+  let depth = 1;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * Parse the fields of a brace body. `bodyOffset` is where `body` starts in the original
+ * source (so spans are absolute); `relPath` is the dotted path from the root type, used
+ * for the recognized/unrecognized lists (top-level fields are bare names).
+ */
+function parseTypeScriptBody(body: string, parentPath: string, bodyOffset: number, relPath: string): {
+  properties: Record<string, MockPropertyDefinition>;
   spans: ValueSpan[];
   recognized: string[];
   unrecognized: string[];
 } {
-  const config: Record<string, unknown> = {};
+  const properties: Record<string, MockPropertyDefinition> = {};
   const spans: ValueSpan[] = [];
   const recognized: string[] = [];
   const unrecognized: string[] = [];
-  
-  // Simple field parser: looks for `field: Type` or `field?: Type`
-  const fieldRegex = /(\w+)\s*(\?)?\s*:\s*([^;,]+)/g;
+
+  // Field parser: `field: Type` or `field?: Type`, or `field: {` opening a nested object type
+  const fieldRegex = /(\w+)\s*(\?)?\s*:\s*([^;,\n{}]+|\{)/g;
   let match;
-  
+
   while ((match = fieldRegex.exec(body)) !== null) {
     const [, fieldName, isOptional, typeDef] = match;
     const fullFieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-    
-    // Parse the type definition
-    const { mockType, mockValue, spanStart, spanEnd, quote } = parseTypeScriptType(typeDef, match.index);
-    
-    if (mockType) {
-      config[fieldName] = {
-        type: mockType,
-        optional: !!isOptional,
-        // For now, store a placeholder value
-        // TODO: Store the actual mock configuration
-      };
+    const listName = relPath ? `${relPath}.${fieldName}` : fieldName;
+    const matchEnd = match.index + match[0].length;
+
+    if (typeDef === '{' || body[matchEnd] === '{') {
+      // Inline object type: brace-match it so its fields don't leak into this level.
+      const open = matchEnd + (typeDef === '{' ? 0 : 1);
+      const close = matchBrace(body, open);
+      if (close < 0) { unrecognized.push(listName); break; }
+      fieldRegex.lastIndex = close + 1;
+      if (typeDef !== '{' || fieldName === UNSAFE_KEY) {
+        // e.g. `x: Array<{ a: string }>`: a generic wrapping an object; skip it whole
+        unrecognized.push(listName);
+        continue;
+      }
+      const inner = parseTypeScriptBody(body.slice(open, close), fullFieldPath, bodyOffset + open, listName);
+      let mock: MockDefinition = { type: 'object', properties: inner.properties };
+      const arr = /^\s*\[\]/.exec(body.slice(close + 1));
+      if (arr) {
+        mock = { type: 'array', itemType: mock };
+        fieldRegex.lastIndex = close + 1 + arr[0].length;
+      }
+      properties[fieldName] = { mock, optional: !!isOptional };
+      spans.push(...inner.spans);
+      recognized.push(listName, ...inner.recognized);
+      unrecognized.push(...inner.unrecognized);
+      continue;
+    }
+
+    if (fieldName === UNSAFE_KEY) { unrecognized.push(listName); continue; }
+
+    // Parse the type definition (typeDef starts right after `:\s*`, so its offset is exact)
+    const typeOffset = bodyOffset + matchEnd - typeDef.length;
+    const { definition, spanStart, spanEnd, quote } = parseTypeScriptType(typeDef, typeOffset);
+
+    if (definition) {
+      properties[fieldName] = { mock: definition, optional: !!isOptional };
       
       spans.push({
         fieldPath: fullFieldPath,
@@ -230,19 +290,18 @@ function parseTypeScriptBody(body: string, parentPath: string, parentFields: str
         end: spanEnd,
         quote,
       });
-      
-      recognized.push(fieldName);
+
+      recognized.push(listName);
     } else {
-      unrecognized.push(fieldName);
+      unrecognized.push(listName);
     }
   }
   
-  return { config, spans, recognized, unrecognized };
+  return { properties, spans, recognized, unrecognized };
 }
 
 function parseTypeScriptType(typeDef: string, baseOffset: number): {
-  mockType: string | null;
-  mockValue: unknown;
+  definition: MockDefinition | null;
   spanStart: number;
   spanEnd: number;
   quote: string;
@@ -253,8 +312,10 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
   if (/^(\w+)\[\]$/.test(trimmed)) {
     const elementType = trimmed.slice(0, -2);
     return {
-      mockType: 'array',
-      mockValue: null,
+      definition: {
+        type: 'array',
+        itemType: parseTypeScriptType(elementType, 0).definition ?? { type: 'any' },
+      },
       spanStart: baseOffset + typeDef.indexOf(elementType),
       spanEnd: baseOffset + typeDef.indexOf('['),
       quote: '',
@@ -271,8 +332,7 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
   // Handle literal types: "value"
   if (/^['"](.*)['"]$/.test(trimmed)) {
     return {
-      mockType: 'literal',
-      mockValue: trimmed.slice(1, -1),
+      definition: { type: 'string', default: trimmed.slice(1, -1) },
       spanStart: baseOffset,
       spanEnd: baseOffset + trimmed.length,
       quote: trimmed[0],
@@ -280,7 +340,7 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
   }
   
   // Primitive types
-  const primitiveMap: Record<string, string> = {
+  const primitiveMap: Record<string, MockPrimitiveDefinition['type']> = {
     'string': 'string',
     'number': 'number',
     'boolean': 'boolean',
@@ -291,10 +351,9 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
     'undefined': 'null',
   };
   
-  if (primitiveMap[trimmed]) {
+  if (Object.prototype.hasOwnProperty.call(primitiveMap, trimmed)) {
     return {
-      mockType: primitiveMap[trimmed],
-      mockValue: getDefaultMockValue(primitiveMap[trimmed]),
+      definition: { type: primitiveMap[trimmed] },
       spanStart: baseOffset,
       spanEnd: baseOffset + trimmed.length,
       quote: '',
@@ -303,8 +362,7 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
   
   // Custom type or unrecognized
   return {
-    mockType: null,
-    mockValue: null,
+    definition: null,
     spanStart: baseOffset,
     spanEnd: baseOffset + trimmed.length,
     quote: '',
@@ -313,29 +371,25 @@ function parseTypeScriptType(typeDef: string, baseOffset: number): {
 
 function parseJSONSchemaProperties(
   properties: Record<string, unknown>,
-  parentPath: string,
+  required: string[],
   parentSpans: ValueSpan[]
 ): {
-  config: Record<string, unknown>;
+  properties: Record<string, MockPropertyDefinition>;
   spans: ValueSpan[];
   recognized: string[];
   unrecognized: string[];
 } {
-  const config: Record<string, unknown> = {};
+  const out: Record<string, MockPropertyDefinition> = {};
   const spans: ValueSpan[] = [...parentSpans];
   const recognized: string[] = [];
   const unrecognized: string[] = [];
   
   for (const [fieldName, schema] of Object.entries(properties)) {
-    const schemaObj = schema as Record<string, unknown>;
-    const type = schemaObj.type as string;
-    const fullFieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
+    if (fieldName === UNSAFE_KEY) { unrecognized.push(fieldName); continue; }
+    const definition = jsonSchemaToDefinition(schema);
     
-    if (type) {
-      config[fieldName] = {
-        type,
-        // TODO: Extract more schema properties (format, enum, etc.)
-      };
+    if (definition) {
+      out[fieldName] = { mock: definition, optional: !required.includes(fieldName) };
       
       // For JSON Schema, we don't have source spans yet
       // This would need to be implemented by tracking positions in the original JSON
@@ -346,52 +400,78 @@ function parseJSONSchemaProperties(
     }
   }
   
-  return { config, spans, recognized, unrecognized };
+  return { properties: out, spans, recognized, unrecognized };
 }
 
-function buildMockConfigFromValue(
-  value: unknown,
-  parentPath: string,
-  parentSpans: ValueSpan[]
-): {
-  config: Record<string, unknown>;
-  spans: ValueSpan[];
-} {
-  const config: Record<string, unknown> = {};
-  const spans: ValueSpan[] = [...parentSpans];
+/** Map one JSON Schema node to a mock definition, or null if it has no usable type. */
+function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | null {
+  if (!schema || typeof schema !== 'object' || depth > 10) return null;
+  const node = schema as Record<string, unknown>;
+  const type = Array.isArray(node.type) ? node.type.find((t) => t !== 'null') ?? node.type[0] : node.type;
   
-  if (Array.isArray(value)) {
-    config.type = 'array';
-    if (value.length > 0) {
-      const { config: itemConfig } = buildMockConfigFromValue(value[0], '', []);
-      config.itemType = itemConfig;
-    }
-  } else if (value && typeof value === 'object') {
-    config.type = 'object';
-    const properties: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value)) {
-      const { config: propConfig } = buildMockConfigFromValue(val, '', []);
-      properties[key] = propConfig;
-    }
-    config.properties = properties;
-  } else {
-    config.type = typeof value;
-    config.default = value;
-  }
-  
-  return { config, spans };
-}
-
-function getDefaultMockValue(type: string): unknown {
   switch (type) {
-    case 'string': return '';
-    case 'number': return 0;
-    case 'boolean': return false;
-    case 'date': return '2026-01-01T00:00:00.000Z';
-    case 'null': return null;
-    case 'any': return null;
-    default: return null;
+    case 'object': {
+      const props = node.properties && typeof node.properties === 'object'
+        ? (node.properties as Record<string, unknown>)
+        : {};
+      const required = Array.isArray(node.required) ? (node.required as string[]) : [];
+      const properties: Record<string, MockPropertyDefinition> = {};
+      for (const [key, child] of Object.entries(props)) {
+        if (key === UNSAFE_KEY) continue;
+        const mock = jsonSchemaToDefinition(child, depth + 1);
+        if (mock) properties[key] = { mock, optional: !required.includes(key) };
+      }
+      return { type: 'object', properties };
+    }
+    case 'array':
+      return { type: 'array', itemType: jsonSchemaToDefinition(node.items, depth + 1) ?? { type: 'any' } };
+    case 'string': {
+      const def: MockPrimitiveDefinition = { type: node.format === 'date-time' || node.format === 'date' ? 'date' : 'string' };
+      if (def.type === 'string' && typeof node.format === 'string') def.format = node.format;
+      if (typeof node.minLength === 'number') def.minLength = node.minLength;
+      if (typeof node.maxLength === 'number') def.maxLength = node.maxLength;
+      if (typeof node.pattern === 'string') def.pattern = node.pattern;
+      return def;
+    }
+    case 'number':
+    case 'integer': {
+      const def: MockPrimitiveDefinition = { type: 'number' };
+      if (type === 'integer') def.integer = true;
+      if (typeof node.minimum === 'number') def.minimum = node.minimum;
+      if (typeof node.maximum === 'number') def.maximum = node.maximum;
+      return def;
+    }
+    case 'boolean':
+      return { type: 'boolean' };
+    case 'null':
+      return { type: 'null' };
+    default:
+      return null;
   }
+}
+
+/** Infer a mock definition from a sample JSON value; primitives keep the sample as their default. */
+function buildMockConfigFromValue(value: unknown, depth = 0): MockDefinition {
+  if (depth > 10) return { type: 'any' };
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      itemType: value.length > 0 ? buildMockConfigFromValue(value[0], depth + 1) : { type: 'any' },
+    };
+  }
+  if (value && typeof value === 'object') {
+    const properties: Record<string, MockPropertyDefinition> = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (key === UNSAFE_KEY) continue;
+      properties[key] = { mock: buildMockConfigFromValue(val, depth + 1) };
+    }
+    return { type: 'object', properties };
+  }
+  if (value === null) return { type: 'null' };
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return { type: typeof value as 'string' | 'number' | 'boolean', default: value };
+  }
+  return { type: 'any' };
 }
 
 /**
@@ -399,7 +479,7 @@ function getDefaultMockValue(type: string): unknown {
  * value — patch-in-place, so unrecognized code is preserved verbatim. Spans are
  * applied right-to-left so earlier offsets stay valid as lengths change.
  */
-export function patchCode(imp: SchemaImport, config: MockConfig): string {
+export function patchCode(imp: SchemaImport, _config: MockConfig): string {
   // TODO: Implement based on Rackwave's patchCode pattern
   // This will use the spans from the import to rewrite values in the original source
   

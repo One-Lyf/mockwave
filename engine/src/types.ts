@@ -71,6 +71,8 @@ export interface MockPrimitiveDefinition {
   maximum?: number;
   /** For numbers: is integer */
   integer?: boolean;
+  /** For non-integer numbers: decimal places to round to (default 2) */
+  precision?: number;
 }
 
 /**
