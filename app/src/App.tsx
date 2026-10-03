@@ -154,7 +154,7 @@ function generateTypeScriptMock(schema: string): string {
 export const mock${typeName}List: ${typeName}[] = Array(10).fill(null).map(() => mock${typeName});`;
 }
 
-function generateJSONMock(schema: string): string {
+function generateJSONMock(_schema: string): string {
   return `{
   "mockData": {
     "generatedAt": "${new Date().toISOString()}",
