@@ -2,15 +2,15 @@
 
 > Generate realistic mock data with the copy-as-code pattern
 
-**Mockwave** is the third app in the **Waves Suite** (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). It applies the proven copy-as-code pattern to data mocking: import your real data schema, configure mocking rules, and copy the generated mock data back into your project.
+**Mockwave** is the third app in **WaveRider** (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). It applies the proven copy-as-code pattern to data mocking: import your real data schema, configure mocking rules, and copy the generated mock data back into your project.
 
 ```
 Paste your schema -> Configure mocks -> Generate realistic data -> Copy mock code
 ```
 
-## The Waves Suite Pattern
+## The WaveRider Pattern
 
-All Waves Suite apps follow the same pattern:
+All WaveRider apps follow the same pattern:
 
 | App | Domain | Pattern |
 |-----|--------|---------|
@@ -131,7 +131,7 @@ mockwave/
 │   └── src/
 │       ├── main.tsx              # Entry point
 │       ├── App.tsx               # Main app component
-│       └── index.css            # Styles (Waves Suite theme)
+│       └── index.css            # Styles (WaveRider theme)
 │
 └── engine/                       # Core logic (@mockwave/engine)
     └── src/

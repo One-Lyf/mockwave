@@ -173,7 +173,7 @@ export function parseJSONData(code: string): SchemaImport | null {
  * Order: TypeScript -> JSON Schema -> JSON -> (future: others)
  */
 export function parseSchema(code: string): SchemaImport | null {
-  // Try TypeScript first (most common for Waves Suite users)
+  // Try TypeScript first (most common for WaveRider users)
   const tsResult = parseTypeScriptSchema(code);
   if (tsResult) return tsResult;
   
