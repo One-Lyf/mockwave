@@ -19,6 +19,8 @@ import type {
   MockOptions,
   GeneratedMock
 } from './types';
+import * as hints from './fieldHints';
+import { classifyField, type FieldHint, type NumberHint, type DateHint } from './fieldHints';
 
 /** A source of uniform randoms in [0, 1), like Math.random. */
 export type Rng = () => number;
@@ -81,7 +83,7 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
     options,
     now: Number.isFinite(ref) ? ref : hasSeed(options.seed) ? SEEDED_EPOCH : Date.now(),
   };
-  const data = generateFromDefinition(config.root, ctx);
+  const data = generateFromDefinition(config.root, ctx, 0);
 
   return {
     data,
@@ -92,9 +94,10 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
 }
 
 /**
- * Generate a mock value from a definition.
+ * Generate a mock value from a definition. `name` is the field (or list/map) name the
+ * value lives under; it drives the field-name heuristics (see fieldHints.ts).
  */
-function generateFromDefinition(definition: MockDefinition, ctx: GenContext, depth: number = 0): unknown {
+function generateFromDefinition(definition: MockDefinition, ctx: GenContext, depth: number, name?: string): unknown {
   // Prevent infinite recursion
   if (depth > 10) {
     return null;
@@ -104,11 +107,11 @@ function generateFromDefinition(definition: MockDefinition, ctx: GenContext, dep
     case 'object':
       return generateMockObject(definition as MockObjectDefinition, ctx, depth);
     case 'array':
-      return generateMockArray(definition as MockArrayDefinition, ctx, depth);
+      return generateMockArray(definition as MockArrayDefinition, ctx, depth, name);
     case 'record':
-      return generateMockRecord(definition as MockRecordDefinition, ctx, depth);
+      return generateMockRecord(definition as MockRecordDefinition, ctx, depth, name);
     default:
-      return generateMockPrimitive(definition as MockPrimitiveDefinition, ctx);
+      return generateMockPrimitive(definition as MockPrimitiveDefinition, ctx, name);
   }
 }
 
@@ -134,32 +137,17 @@ function generateMockObject(definition: MockObjectDefinition, ctx: GenContext, d
       continue;
     }
 
-    // Generate from the mock definition
-    const value = generateFromDefinition(propDef.mock, ctx, depth + 1);
-
-    // Handle special field names
-    let finalValue = value;
-
-    // For 'id' fields, generate a UUID by default
-    if (fieldName.toLowerCase().includes('id') && typeof finalValue === 'string' && !finalValue) {
-      finalValue = generateUUID(ctx.rng);
-    }
-
-    // For 'createdAt', 'updatedAt', 'date', 'timestamp' fields, generate a date
-    if (/created|updated|date|timestamp/i.test(fieldName) && (typeof finalValue === 'string' && !finalValue)) {
-      finalValue = generateDate(ctx);
-    }
-
-    obj[fieldName] = finalValue;
+    obj[fieldName] = generateFromDefinition(propDef.mock, ctx, depth + 1, fieldName);
   }
 
   return obj;
 }
 
 /**
- * Generate a mock array from its definition.
+ * Generate a mock array from its definition. Items take the list's name, so
+ * `emails: string[]` yields emails.
  */
-function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, depth: number): unknown[] {
+function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, depth: number, name?: string): unknown[] {
   const { options } = ctx;
   // Determine array length
   let length = 3; // Default
@@ -179,7 +167,7 @@ function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, dep
 
   const arr: unknown[] = [];
   for (let i = 0; i < length; i++) {
-    arr.push(generateFromDefinition(definition.itemType, ctx, depth + 1));
+    arr.push(generateFromDefinition(definition.itemType, ctx, depth + 1, name));
   }
 
   return arr;
@@ -189,9 +177,9 @@ function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, dep
 const RECORD_KEYS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'golf', 'hotel', 'india', 'juliet'];
 
 /**
- * Generate a mock map: a few distinct keys, each with a generated value.
+ * Generate a mock map: a few distinct keys, each with a generated value (named after the map).
  */
-function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, depth: number): Record<string, unknown> {
+function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, depth: number, name?: string): Record<string, unknown> {
   const count = Math.max(0, Math.min(definition.keyCount ?? 3, 20));
   const keys: string[] = [];
   if (definition.keyType === 'number') {
@@ -206,14 +194,16 @@ function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, d
     for (let i = 0; i < count; i++) keys.push(i < pool.length ? pool[i] : `key${i + 1}`);
   }
   const obj: Record<string, unknown> = {};
-  for (const key of keys) obj[key] = generateFromDefinition(definition.valueType, ctx, depth + 1);
+  for (const key of keys) obj[key] = generateFromDefinition(definition.valueType, ctx, depth + 1, name);
   return obj;
 }
 
 /**
- * Generate a mock primitive value from its definition.
+ * Generate a mock primitive value from its definition. Precedence: an explicit
+ * `default`, then `enum`, then the declared constraints (format, pattern, min/max),
+ * then the field-name hint, then the source's example value, then a generic value.
  */
-function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenContext): unknown {
+function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenContext, name?: string): unknown {
   const { rng } = ctx;
   // Use custom default if specified
   if (definition.default !== undefined) {
@@ -225,20 +215,23 @@ function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenCont
     return pick(rng, definition.enum);
   }
 
+  const hint = name ? classifyField(name) : null;
+
   switch (definition.type) {
     case 'string':
-      return generateMockString(definition, ctx);
+      return generateMockString(definition, ctx, hint);
     case 'number':
-      return generateMockNumber(definition, ctx);
+      return generateMockNumber(definition, ctx, hint);
     case 'boolean':
       return rng() < 0.7; // 70% true
     case 'date':
-      return generateDate(ctx);
+      return generateDate(ctx, hint?.date);
     case 'null':
       return null;
     case 'any':
     default: {
-      // Random primitive type
+      // Untyped: the name's natural type when it suggests one, else a random primitive
+      if (hint) return generateMockPrimitive({ type: hint.natural }, ctx, name);
       const types = ['string', 'number', 'boolean'] as const;
       return generateMockPrimitive({ type: pick(rng, types) }, ctx);
     }
@@ -253,30 +246,34 @@ function pick<T>(rng: Rng, list: readonly T[]): T {
 /**
  * Generate a mock string value.
  */
-function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext): string {
+function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext, hint: FieldHint | null = null): string {
   const { rng } = ctx;
   // Handle specific formats
   if (definition.format) {
     switch (definition.format) {
       case 'uuid':
-        return generateUUID(rng);
+        return hints.uuid(rng);
       case 'email':
-        return generateEmail(rng);
+        return hints.email(rng);
       case 'url':
       case 'uri':
-        return generateUrl(rng);
+        return hints.url(rng);
       case 'phone':
-        return generatePhone(rng);
+        return hints.phone(rng);
       case 'address':
-        return generateAddress(rng);
+        return hints.address(rng);
       case 'name':
-        return generateName(rng);
+        return hints.fullName(rng);
       case 'sentence':
-        return generateSentence(rng);
+        return hints.description(rng);
       case 'paragraph':
-        return generateParagraph(rng);
+        return hints.paragraph(rng);
       case 'word':
-        return generateWord(rng);
+        return hints.word(rng);
+      case 'date':
+        return generateDate(ctx, hint?.date).slice(0, 10);
+      case 'date-time':
+        return generateDate(ctx, hint?.date);
       default:
         // Unknown format, fall through to generic
         break;
@@ -292,138 +289,94 @@ function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext
     }
   }
 
-  // Generic string based on constraints
-  const minLength = definition.minLength || 5;
-  const maxLength = Math.max(minLength, definition.maxLength || 20);
+  const fits = (s: string) =>
+    (definition.minLength === undefined || s.length >= definition.minLength)
+    && (definition.maxLength === undefined || s.length <= definition.maxLength);
+  const example = typeof definition.example === 'string' ? definition.example : undefined;
+
+  // Field-name hint (a weak one, like status/role, defers to the source's own example)
+  if (hint) {
+    let value: string | undefined;
+    if (hint.date) value = generateDate(ctx, hint.date);
+    else if (hint.string && !(hint.weak && example !== undefined)) value = hint.string(rng);
+    else if (hint.number && !hint.string) value = String(generateMockNumber({ type: 'number' }, ctx, hint));
+    if (value !== undefined && fits(value)) return value;
+  }
+
+  if (example !== undefined) return example;
+
+  // Generic string: a few plain words, or random characters to meet length constraints
+  const plain = hints.words(rng);
+  if (fits(plain)) return plain;
+  const maxLength = Math.max(definition.minLength ?? 0, definition.maxLength ?? 20);
+  const minLength = Math.min(maxLength, definition.minLength ?? Math.min(5, maxLength));
 
   return generateRandomString(minLength, maxLength, rng);
 }
 
 /**
- * Generate a mock number value.
+ * Generate a mock number value. Integers unless the definition says otherwise
+ * (`integer: false`, a `precision`) or the field name suggests decimals (price,
+ * rating, latitude); with no hint, a generation-wide `numberOptions.precision`
+ * also asks for decimals.
  */
-function generateMockNumber(definition: MockPrimitiveDefinition, ctx: GenContext): number {
+function generateMockNumber(definition: MockPrimitiveDefinition, ctx: GenContext, hint: FieldHint | null = null): number {
   const { rng, options } = ctx;
-  let value: number;
+  const nh: NumberHint | undefined = hint?.number;
 
-  if (definition.integer) {
-    const min = definition.minimum !== undefined ? Math.ceil(definition.minimum) : 0;
-    const max = definition.maximum !== undefined ? Math.floor(definition.maximum) : 1000;
-    value = Math.floor(rng() * (max - min + 1)) + min;
+  // A date-ish name on a number field (createdAt: number): epoch milliseconds
+  if (!nh && hint?.date && definition.minimum === undefined && definition.maximum === undefined) {
+    return Date.parse(generateDate(ctx, hint.date));
+  }
+
+  const integer = definition.integer === true || (
+    definition.integer === undefined
+    && definition.precision === undefined
+    && (nh ? nh.decimals === 0 : options.numberOptions?.precision === undefined)
+  );
+
+  // Range: declared bounds win, then the hint, then the example's magnitude, then 0-1000
+  const example = typeof definition.example === 'number' && Number.isFinite(definition.example) ? definition.example : undefined;
+  let lo: number;
+  let hi: number;
+  if (nh) {
+    if (nh.yearsBack !== undefined) {
+      hi = new Date(ctx.now).getUTCFullYear();
+      lo = hi - nh.yearsBack;
+    } else {
+      lo = nh.min;
+      hi = nh.max;
+    }
+  } else if (example !== undefined) {
+    hi = Math.max(10, Math.abs(example) * 2);
+    lo = example < 0 ? -hi : 0;
   } else {
-    const min = definition.minimum !== undefined ? definition.minimum : 0;
-    const max = definition.maximum !== undefined ? definition.maximum : 1000;
-    value = rng() * (max - min) + min;
+    lo = 0;
+    hi = 1000;
+  }
+  const width = Math.max(1, hi - lo);
+  let min = definition.minimum ?? lo;
+  let max = definition.maximum ?? hi;
+  if (min > max) {
+    if (definition.maximum === undefined) max = min + width;
+    else if (definition.minimum === undefined) min = max - width;
+    else [min, max] = [max, min];
   }
 
-  // Round non-integers to the requested decimal places: per-field, else the
-  // generation-wide numberOptions.precision, else 2. Clamped to [0, 15] (beyond 15
-  // the factor overflows double precision; negatives/NaN would corrupt the value).
-  if (!definition.integer) {
-    const requested = definition.precision ?? options.numberOptions?.precision ?? 2;
-    const places = Number.isFinite(requested) ? Math.min(15, Math.max(0, Math.round(requested))) : 2;
-    const factor = 10 ** places;
-    value = Math.round(value * factor) / factor;
+  if (integer) {
+    const imin = Math.ceil(min);
+    const imax = Math.floor(max);
+    if (imin > imax) return imin;
+    return Math.floor(rng() * (imax - imin + 1)) + imin;
   }
 
-  return value;
-}
-
-/**
- * Generate a random UUID (v4 layout).
- */
-function generateUUID(rng: Rng = Math.random): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (rng() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
-/**
- * Generate a random email address.
- */
-function generateEmail(rng: Rng = Math.random): string {
-  const local = generateRandomString(5, 10, rng);
-  const domain = generateRandomString(5, 8, rng);
-  const tld = pick(rng, ['com', 'net', 'org', 'io', 'dev']);
-  return `${local}@${domain}.${tld}`;
-}
-
-/**
- * Generate a random URL.
- */
-function generateUrl(rng: Rng = Math.random): string {
-  const protocol = pick(rng, ['https://', 'http://']);
-  const domain = generateRandomString(5, 12, rng);
-  const tld = pick(rng, ['com', 'net', 'org', 'io']);
-  const path = `/${generateRandomString(3, 8, rng)}/${generateRandomString(3, 8, rng)}`;
-  return `${protocol}${domain}.${tld}${path}`;
-}
-
-/**
- * Generate a random phone number.
- */
-function generatePhone(rng: Rng = Math.random): string {
-  const format = pick(rng, ['XXX-XXX-XXXX', '(XXX) XXX-XXXX', '+1-XXX-XXX-XXXX']);
-  return format.replace(/X/g, () => Math.floor(rng() * 10).toString());
-}
-
-/**
- * Generate a random address.
- */
-function generateAddress(rng: Rng = Math.random): string {
-  const streets = ['Main St', 'Oak Ave', 'Pine Rd', 'Elm Blvd', 'Maple Ln'];
-  const cities = ['New York', 'Los Angeles', 'Chicago', 'Austin', 'Denver'];
-  const states = ['CA', 'NY', 'TX', 'CO', 'IL'];
-  const zip = Math.floor(10000 + rng() * 90000).toString();
-
-  const streetNum = Math.floor(1 + rng() * 9999);
-  const street = pick(rng, streets);
-  const city = pick(rng, cities);
-  const state = pick(rng, states);
-
-  return `${streetNum} ${street}, ${city}, ${state} ${zip}`;
-}
-
-/**
- * Generate a random name.
- */
-function generateName(rng: Rng = Math.random): string {
-  const firstNames = ['James', 'Mary', 'John', 'Patricia', 'Robert', 'Jennifer', 'Michael', 'Linda'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis'];
-  return `${pick(rng, firstNames)} ${pick(rng, lastNames)}`;
-}
-
-/**
- * Generate a random sentence.
- */
-function generateSentence(rng: Rng = Math.random): string {
-  const subject = pick(rng, ['The user', 'A system', 'This application', 'Our service']);
-  const verb = pick(rng, ['creates', 'manages', 'processes', 'stores']);
-  const adjective = pick(rng, ['efficient', 'reliable', 'scalable', 'secure']);
-  const object = pick(rng, ['data', 'requests', 'information', 'records']);
-
-  return `${subject} ${verb} ${adjective} ${object}.`;
-}
-
-/**
- * Generate a random paragraph.
- */
-function generateParagraph(rng: Rng = Math.random): string {
-  const sentences = [];
-  const count = Math.floor(3 + rng() * 3); // 3-5 sentences
-  for (let i = 0; i < count; i++) {
-    sentences.push(generateSentence(rng));
-  }
-  return sentences.join(' ');
-}
-
-/**
- * Generate a random word.
- */
-function generateWord(rng: Rng = Math.random): string {
-  return pick(rng, ['data', 'system', 'user', 'application', 'service', 'request', 'response', 'value']);
+  // Decimal places: per-field, else generation-wide, else the hint's, else 2.
+  // Clamped to [0, 15] (beyond 15 the factor overflows double precision; negatives/NaN would corrupt the value).
+  const requested = definition.precision ?? options.numberOptions?.precision ?? nh?.decimals ?? 2;
+  const places = Number.isFinite(requested) ? Math.min(15, Math.max(0, Math.round(requested))) : 2;
+  const factor = 10 ** places;
+  const value = Math.round((rng() * (max - min) + min) * factor) / factor;
+  return Math.min(max, Math.max(min, value));
 }
 
 /**
@@ -439,10 +392,14 @@ function generateRandomString(minLength: number, maxLength: number, rng: Rng = M
   return result;
 }
 
+const YEAR_MS = 365.25 * 24 * 60 * 60 * 1000;
+
 /**
- * Generate a date string, relative to the context's reference "now".
+ * Generate an ISO date string, relative to the context's reference "now": within the
+ * last year by default, or in the hint's range (birthdays: 18-90 years back). An
+ * explicit `dateRange` option wins over both.
  */
-function generateDate(ctx: GenContext): string {
+function generateDate(ctx: GenContext, hint?: DateHint): string {
   const { rng, options, now } = ctx;
   const year = new Date(now).getUTCFullYear();
   let time: number;
@@ -451,6 +408,8 @@ function generateDate(ctx: GenContext): string {
     const min = options.dateRange.min ? new Date(options.dateRange.min).getTime() : Date.UTC(year - 5, 0, 1);
     const max = options.dateRange.max ? new Date(options.dateRange.max).getTime() : Date.UTC(year + 1, 0, 1);
     time = min + rng() * (max - min);
+  } else if (hint && (hint.minYearsAgo !== 0 || hint.maxYearsAgo !== 1)) {
+    time = now - (hint.minYearsAgo + rng() * (hint.maxYearsAgo - hint.minYearsAgo)) * YEAR_MS;
   } else {
     // Random date in the year before the reference
     time = now - rng() * 365 * 24 * 60 * 60 * 1000;
@@ -483,14 +442,15 @@ function generateFromRegex(pattern: string, ctx: GenContext): string {
 }
 
 // Export for testing (each takes an optional Rng; default Math.random)
+const withDefault = (make: (rng: Rng) => string) => (rng: Rng = Math.random) => make(rng);
 export const generators = {
-  uuid: generateUUID,
-  email: generateEmail,
-  url: generateUrl,
-  phone: generatePhone,
-  address: generateAddress,
-  name: generateName,
-  sentence: generateSentence,
-  paragraph: generateParagraph,
-  word: generateWord,
+  uuid: withDefault(hints.uuid),
+  email: withDefault(hints.email),
+  url: withDefault(hints.url),
+  phone: withDefault(hints.phone),
+  address: withDefault(hints.address),
+  name: withDefault(hints.fullName),
+  sentence: withDefault(hints.description),
+  paragraph: withDefault(hints.paragraph),
+  word: withDefault(hints.word),
 } as const;

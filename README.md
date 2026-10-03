@@ -102,9 +102,11 @@ export const mockUser: User = {
 - Extracts schema structure from your source code
 - Tracks exact source positions for in-place modifications
 - Handles nested objects, arrays, and primitive types
+- Resolves types defined in the same paste: `owner: Account`, `Account[]`, `Array<Account>`, `Record<string, Account>`, enums and aliases (`extends` merged; cycles capped like GraphQL: 4 levels deep, a type at most twice on one path)
 
 ### Smart Mock Generation
-- Field name heuristics: id -> UUID, createdAt -> Date, etc.
+- Field name heuristics, for every format: id -> UUID, name -> "Maria Garcia", email -> maria.garcia@example.com, age -> 18-90, price -> 2-decimal money, rating -> 1-5, createdAt -> ISO date, isActive -> boolean, plus phone, URL, avatar, city, country, address, zip, title, description, bio, company and more (small built-in word lists; emails, URLs, phones and IPs use reserved example ranges)
+- Numbers are integers unless the field name (price, rating, latitude) or the schema (`Float`, a decimal sample) says decimals
 - Type-based generation: strings, numbers, booleans, dates, nulls
 - Format support: UUID, email, URL, phone, address, name, etc.
 - Array support: Configurable length and item types

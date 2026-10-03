@@ -86,10 +86,16 @@ export interface MockPrimitiveDefinition {
   minimum?: number;
   /** For numbers: max value */
   maximum?: number;
-  /** For numbers: is integer */
+  /** For numbers: true = integers, false = decimals; unset = integers unless the field name suggests decimals (price, rating) */
   integer?: boolean;
   /** For non-integer numbers: decimal places to round to (default 2) */
   precision?: number;
+  /**
+   * A sample value from the source (e.g. sample JSON). It sizes generated numbers and
+   * stands in for strings the field name says nothing about; it is never echoed for
+   * names that suggest a value (id, email, price...).
+   */
+  example?: unknown;
 }
 
 /**

@@ -30,7 +30,7 @@ const BUILTIN_SCALARS: Record<string, MockPrimitiveDefinition> = {
   String: { type: 'string' },
   ID: { type: 'string', format: 'uuid' },
   Int: { type: 'number', integer: true },
-  Float: { type: 'number' },
+  Float: { type: 'number', integer: false },
   Boolean: { type: 'boolean' },
 };
 
