@@ -4,13 +4,16 @@
  * Replaces the masking regexes, which went quadratic on adversarial pastes (many
  * unterminated `/*` or `"""`, each rescanning to the end). This walks the text once:
  * a closer that is not found is remembered, so later openers of the same kind are
- * skipped without searching again. Matches the old regexes' behavior: an unterminated
- * comment or string is left as plain text, and a `"` / `'` string ends at a newline.
+ * skipped without searching again. As before, an unterminated comment or string is left
+ * as plain text, and a `"` / `'` string ends at an unescaped newline (a `\` line
+ * continuation carries it to the next line, as in JavaScript).
  *
  * Why the memo is safe: if a string opened at `i` finds no closer before its limit, every
  * same-quote character after `i` (up to that limit) was consumed as an escaped `\q`, and
  * the scan state just past it is the same as starting fresh there. So a later opener of
- * that quote, before the same limit, cannot find a closer either.
+ * that quote, before the same limit, cannot find a closer either. (This loop only moves
+ * forward, so every later opener is past the failed one. Callers that revisit text, like
+ * codeImport's skipString, must only trust the interval between the two.)
  */
 
 export interface Syntax {

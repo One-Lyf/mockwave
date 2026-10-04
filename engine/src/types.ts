@@ -172,7 +172,8 @@ export interface MockOptions {
   seed?: string | number;
   /** Anchor for relative dates (default: now; a fixed 2026-01-01 UTC epoch when `seed` is set, so seeded output stays reproducible) */
   referenceDate?: string | Date;
-  /** Number of items to generate (for arrays) */
+  /** Number of items to generate (for arrays). One call generates at most 50,000 values;
+   *  past that, lists come out empty and other values null. */
   count?: number;
   /** Whether to include null/undefined values */
   includeNulls?: boolean;

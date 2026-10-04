@@ -279,10 +279,12 @@ function blankStrings(src: string): string {
 }
 const STRINGS_ONLY = new Set(['string'] as const);
 
-/** Per text and quote char: an opener before this index has no closer (see scan.ts for
- *  why that holds), so runs of unterminated quotes don't rescan to the line or text end.
- *  Set for the duration of one parseTypeScriptSchema call. */
-let stringMemo: Map<string, Record<string, number>> | null = null;
+/** Per text and quote char: the last scan that found no closer, as [from, to). An opener
+ *  strictly inside it has no closer either (see scan.ts for why), so runs of unterminated
+ *  quotes don't rescan to the line or text end. Only that interval is trusted: scanners
+ *  revisit earlier text, and an opener before `from` may well be closed. Set for the
+ *  duration of one parseTypeScriptSchema call. */
+let stringMemo: Map<string, Record<string, [number, number]>> | null = null;
 
 /** `text[i]` is a quote ('"`); return the index just past its closing quote. An
  *  unterminated quote (or a '/" string reaching a newline) is treated as a plain char. */
@@ -290,7 +292,8 @@ function skipString(text: string, i: number): number {
   const q = text[i];
   let memo = stringMemo?.get(text);
   if (stringMemo && !memo) { memo = {}; stringMemo.set(text, memo); }
-  if (memo && i < (memo[q] ?? -1)) return i + 1;
+  const known = memo?.[q];
+  if (known && known[0] < i && i < known[1]) return i + 1;
   let j = i + 1;
   for (; j < text.length; j++) {
     const c = text[j];
@@ -298,7 +301,7 @@ function skipString(text: string, i: number): number {
     if (c === q) return j + 1;
     if (c === '\n' && q !== '`') break;
   }
-  if (memo) memo[q] = j;
+  if (memo) memo[q] = [i, j];
   return i + 1;
 }
 

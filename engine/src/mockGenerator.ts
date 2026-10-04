@@ -60,7 +60,7 @@ export function createRng(seed?: string | number): Rng {
 
 /** Values generated per call at most: nested lists (`string[][][][]`) multiply, so after
  *  this many values lists come out empty and other values null. Deterministic. */
-const VALUE_BUDGET = 20000;
+const VALUE_BUDGET = 50000;
 
 /** Dates are anchored here when a seed is given (so seeded output never drifts with the clock). */
 const SEEDED_EPOCH = Date.UTC(2026, 0, 1);
