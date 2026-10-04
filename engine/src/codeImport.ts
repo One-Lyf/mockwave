@@ -16,6 +16,7 @@
 
 import type { MockConfig, MockDefinition, MockPrimitiveDefinition, MockPropertyDefinition } from './types';
 import { parseGraphQLSchema } from './graphqlImport';
+import { blankLiterals } from './scan';
 
 /** A mockable value located in the pasted schema, with its exact text span so
  *  patchCode() can rewrite it in place. */
@@ -73,7 +74,8 @@ export interface SchemaImport {
  *   `Record<string, Account>` resolve to an interface / type alias / enum defined in
  *   the same input (interface `extends` bases merged in, `A & B` of objects merged).
  *   Cycles are capped like GraphQL: 4 levels below the root, a type at most twice
- *   on one path (one level of self-reference), then an empty list / null.
+ *   on one path (one level of self-reference), then an empty list / null. Referenced
+ *   object types expand breadth-first, so the field budget goes to shallow levels first.
  *
  * Does NOT recognize (reported in `unrecognized`, never leaked into other fields):
  * - Other generics: Partial<T>, Promise<T>, ...
@@ -97,14 +99,25 @@ export function parseTypeScriptSchema(code: string): SchemaImport | null {
   if (candidates.length === 0) return null;
 
   // Root = the first object type no other declaration refers to (so `Account` defined
-  // above `User { owner: Account }` doesn't become the root); else the first one.
-  const refersTo = (from: TsDecl, name: string) => new RegExp(`\\b${name}\\b`).test(masked.slice(from.start, from.end));
+  // above `User { owner: Account }` doesn't become the root); else the first one. Only
+  // type positions count: a member named like a type (`User: string`, `User(): void`)
+  // is not a reference.
+  const typeTexts = new Map<TsDecl, string>();
+  const typeText = (d: TsDecl) => {
+    let t = typeTexts.get(d);
+    if (t === undefined) {
+      t = masked.slice(d.start, d.end).replace(MEMBER_KEY, (_m, lead: string, key: string) => lead + ' '.repeat(key.length));
+      typeTexts.set(d, t);
+    }
+    return t;
+  };
+  const refersTo = (from: TsDecl, name: string) => new RegExp(`\\b${name}\\b`).test(typeText(from));
   const root = candidates.find((c) => ![...decls.values()].some((d) => d !== c && refersTo(d, c.name))) ?? candidates[0];
   const typeName = root.name;
   const [open, close] = root.body!;
   const schemaType: SchemaType = root.kind === 'interface' ? 'typescript-interface' : 'typescript-type';
 
-  const ctx: TsCtx = { decls, root: typeName, stack: [typeName], budget: TS_FIELD_BUDGET, reported: [], reportedSet: new Set() };
+  const ctx: TsCtx = { decls, root: typeName, stack: [typeName], budget: TS_FIELD_BUDGET, reported: [], reportedSet: new Set(), queue: [], noDefer: 0, lateRecognized: [] };
   const inherited = root.kind === 'interface' ? inheritedMembers(clean, root, ctx, typeName, '', new Set([typeName])) : null;
   // An alias root is its whole right side when that is an object (`{ ... } & Base`),
   // else just its first body
@@ -115,6 +128,8 @@ export function parseTypeScriptSchema(code: string): SchemaImport | null {
   }
   own ??= parseTypeScriptBody(clean, open, close, typeName, '', 0, ctx);
   const properties = { ...(inherited?.properties ?? {}), ...own.properties };
+  // Referenced types expand breadth-first, after every field above them is counted
+  for (let q = 0; q < ctx.queue.length; q++) runJob(clean, ctx.queue[q], ctx);
 
   return {
     config: {
@@ -125,7 +140,7 @@ export function parseTypeScriptSchema(code: string): SchemaImport | null {
     spans: own.spans,
     source: src,
     schemaType,
-    recognized: dedupe([...(inherited?.recognized ?? []), ...own.recognized]),
+    recognized: dedupe([...(inherited?.recognized ?? []), ...own.recognized, ...ctx.lateRecognized]),
     unrecognized: dedupe([...(inherited?.unrecognized ?? []), ...own.unrecognized, ...ctx.reported]),
   };
 }
@@ -245,13 +260,11 @@ export function blankFences(src: string): string {
 }
 
 /** Replace // and block comments with spaces (newlines kept), skipping string literals,
- *  so the result has the same length and offsets as the input. */
+ *  so the result has the same length and offsets as the input. One linear pass (see scan.ts). */
 function blankComments(src: string): string {
-  return src.replace(
-    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-    (m: string, str?: string) => (str ? m : m.replace(/[^\n]/g, ' ')),
-  );
+  return blankLiterals(src, { single: true, template: true, slash: true }, COMMENTS_ONLY);
 }
+const COMMENTS_ONLY = new Set(['comment'] as const);
 
 /** Blank the contents of string and template literals (quotes and newlines kept). */
 function blankStrings(src: string): string {
@@ -418,9 +431,22 @@ type TsCtx = {
   budget: number;
   reported: string[];
   reportedSet: Set<string>;
+  /** Referenced object types waiting to expand (breadth-first, so the budget goes to shallow levels first). */
+  queue: TsJob[];
+  /** > 0 while parsing intersection parts: those merge properties at once, so they can't wait. */
+  noDefer: number;
+  /** Recognized fields of queued types, in expansion order. */
+  lateRecognized: string[];
 };
 
+/** A queued reference: expanding `decl` fills `properties` (already placed in the result). */
+type TsJob = { decl: TsDecl; stack: string[]; listName: string; depth: number; properties: Record<string, MockPropertyDefinition> };
+
 const dedupe = (xs: string[]) => [...new Set(xs)];
+
+/** A member key in a declaration body (`name:`, `name?:`, a method `name(`) after `{`, `;`, `,`
+ *  or a line start: group 1 is the lead, group 2 the key to blank. */
+const MEMBER_KEY = /([{;,]\s*|^[ \t]*)((?:readonly\s+)?(?:\w+|"[^"\n]*"|'[^'\n]*'))(?=\s*\??\s*[:(])/gm;
 
 /**
  * Collect every top-level `interface`, `type` alias and `enum` (first of a name wins).
@@ -546,34 +572,63 @@ function resolveDecl(text: string, decl: TsDecl, ctx: TsCtx, listName: string, d
   ) {
     return { ...noType(), capped: true };
   }
+  // A plain object type (an interface, or `type X = { ... }`) waits its turn in the queue
+  const plainObject = decl.kind === 'interface'
+    ? !!decl.body
+    : !!decl.body && !!decl.rhs && !text.slice(decl.body[1] + 1, decl.rhs[1]).trim();
+  if (plainObject && ctx.noDefer === 0) {
+    const properties: Record<string, MockPropertyDefinition> = {};
+    ctx.queue.push({ decl, stack: [...ctx.stack, decl.name], listName, depth, properties });
+    return { def: { type: 'object', name: decl.name, properties }, spans: [], recognized: [], unrecognized: [] };
+  }
   ctx.stack.push(decl.name);
   try {
-    // Inside the declaration, field lists use `Decl.field` labels (once per source field)
-    let r: TypeResult;
-    if (decl.kind === 'interface' && decl.body) {
-      const up = inheritedMembers(text, decl, ctx, decl.name, listName, new Set([decl.name]));
-      const own = parseTypeScriptBody(text, decl.body[0], decl.body[1], decl.name, listName, depth + 1, ctx);
-      r = {
-        def: { type: 'object', properties: { ...up.properties, ...own.properties } },
-        spans: [],
-        recognized: [...up.recognized, ...own.recognized],
-        unrecognized: [...up.unrecognized, ...own.unrecognized],
-      };
-    } else if (decl.rhs) {
-      r = parseTypeExpr(text, decl.rhs[0], decl.rhs[1], decl.name, listName, depth + 1, ctx);
-      // An alias's own value (`type Name = string`): unrecognized under the alias name
-      if (!r.def && !r.capped) report(ctx, decl.name);
-    } else {
-      return noType();
-    }
-    const prefix = `${listName}.`;
-    // Root fields stay bare (as at the top level), so a cycle back to the root doesn't report them twice
-    const label = (field: string) => (decl.name === ctx.root ? field : `${decl.name}.${field}`);
-    for (const u of r.unrecognized) report(ctx, u.startsWith(prefix) ? label(u.slice(prefix.length)) : u);
-    return { def: r.def, capped: r.capped, spans: [], recognized: r.recognized, unrecognized: [] };
+    return expandDecl(text, decl, ctx, listName, depth);
   } finally {
     ctx.stack.pop();
   }
+}
+
+/** Expand a queued reference in its own path context. */
+function runJob(text: string, job: TsJob, ctx: TsCtx): void {
+  const saved = ctx.stack;
+  ctx.stack = job.stack;
+  try {
+    const r = expandDecl(text, job.decl, ctx, job.listName, job.depth);
+    if (r.def?.type === 'object') Object.assign(job.properties, r.def.properties);
+    ctx.lateRecognized.push(...r.recognized);
+  } finally {
+    ctx.stack = saved;
+  }
+}
+
+/** Expand `decl` (already on `ctx.stack`). Spans are not kept: the patch targets are the
+ *  declaration's own fields, not each use. */
+function expandDecl(text: string, decl: TsDecl, ctx: TsCtx, listName: string, depth: number): TypeResult {
+  // Inside the declaration, field lists use `Decl.field` labels (once per source field)
+  let r: TypeResult;
+  if (decl.kind === 'interface' && decl.body) {
+    const up = inheritedMembers(text, decl, ctx, decl.name, listName, new Set([decl.name]));
+    const own = parseTypeScriptBody(text, decl.body[0], decl.body[1], decl.name, listName, depth + 1, ctx);
+    r = {
+      def: { type: 'object', name: decl.name, properties: { ...up.properties, ...own.properties } },
+      spans: [],
+      recognized: [...up.recognized, ...own.recognized],
+      unrecognized: [...up.unrecognized, ...own.unrecognized],
+    };
+  } else if (decl.rhs) {
+    r = parseTypeExpr(text, decl.rhs[0], decl.rhs[1], decl.name, listName, depth + 1, ctx);
+    // An alias's own value (`type Name = string`): unrecognized under the alias name
+    if (!r.def && !r.capped) report(ctx, decl.name);
+    if (r.def?.type === 'object' && !r.def.name) r = { ...r, def: { ...r.def, name: decl.name } };
+  } else {
+    return noType();
+  }
+  const prefix = `${listName}.`;
+  // Root fields stay bare (as at the top level), so a cycle back to the root doesn't report them twice
+  const label = (field: string) => (decl.name === ctx.root ? field : `${decl.name}.${field}`);
+  for (const u of r.unrecognized) report(ctx, u.startsWith(prefix) ? label(u.slice(prefix.length)) : u);
+  return { def: r.def, capped: r.capped, spans: [], recognized: r.recognized, unrecognized: [] };
 }
 
 function report(ctx: TsCtx, label: string): void {
@@ -696,15 +751,20 @@ function parseTypeExpr(text: string, s: number, e: number, fieldPath: string, li
     const properties: Record<string, MockPropertyDefinition> = {};
     const out: TypeResult = { def: null, spans: [], recognized: [], unrecognized: [] };
     let objects = 0;
-    for (const [a, b] of parts) {
-      const r = parseTypeExpr(text, a, b, fieldPath, listName, depth + 1, ctx);
-      if (r.capped || !r.def) continue;
-      if (r.def.type !== 'object') return noType();
-      objects++;
-      Object.assign(properties, r.def.properties);
-      out.spans.push(...r.spans);
-      out.recognized.push(...r.recognized);
-      out.unrecognized.push(...r.unrecognized);
+    ctx.noDefer++;
+    try {
+      for (const [a, b] of parts) {
+        const r = parseTypeExpr(text, a, b, fieldPath, listName, depth + 1, ctx);
+        if (r.capped || !r.def) continue;
+        if (r.def.type !== 'object') return noType();
+        objects++;
+        Object.assign(properties, r.def.properties);
+        out.spans.push(...r.spans);
+        out.recognized.push(...r.recognized);
+        out.unrecognized.push(...r.unrecognized);
+      }
+    } finally {
+      ctx.noDefer--;
     }
     return objects > 0 ? { ...out, def: { type: 'object', properties } } : noType();
   }

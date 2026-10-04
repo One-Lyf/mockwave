@@ -20,7 +20,7 @@ import type {
   GeneratedMock
 } from './types';
 import * as hints from './fieldHints';
-import { classifyField, type FieldHint, type NumberHint, type DateHint } from './fieldHints';
+import { classifyField, newPerson, personPart, type FieldHint, type NumberHint, type DateHint, type Person, type PersonPart } from './fieldHints';
 
 /** A source of uniform randoms in [0, 1), like Math.random. */
 export type Rng = () => number;
@@ -70,6 +70,18 @@ interface GenContext {
 }
 
 /**
+ * Where a value lives: `name` is its field (or list/map) name, `parent` the enclosing
+ * type or the field holding the object (field-name hints read both), and `people` the
+ * record's people by role, so one record's name, email and username agree. List and
+ * map items get no `people`: `emails: string[]` should not repeat one address.
+ */
+interface Slot {
+  name?: string;
+  parent?: string;
+  people?: Map<string, Person>;
+}
+
+/**
  * Generate mock data from a configuration.
  *
  * @param config - The mock configuration
@@ -83,7 +95,7 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
     options,
     now: Number.isFinite(ref) ? ref : hasSeed(options.seed) ? SEEDED_EPOCH : Date.now(),
   };
-  const data = generateFromDefinition(config.root, ctx, 0);
+  const data = generateFromDefinition(config.root, ctx, 0, { name: config.name });
 
   return {
     data,
@@ -94,10 +106,10 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
 }
 
 /**
- * Generate a mock value from a definition. `name` is the field (or list/map) name the
- * value lives under; it drives the field-name heuristics (see fieldHints.ts).
+ * Generate a mock value from a definition. `slot` says where it lives; it drives the
+ * field-name heuristics (see fieldHints.ts).
  */
-function generateFromDefinition(definition: MockDefinition, ctx: GenContext, depth: number, name?: string): unknown {
+function generateFromDefinition(definition: MockDefinition, ctx: GenContext, depth: number, slot: Slot = {}): unknown {
   // Prevent infinite recursion
   if (depth > 10) {
     return null;
@@ -105,21 +117,23 @@ function generateFromDefinition(definition: MockDefinition, ctx: GenContext, dep
 
   switch (definition.type) {
     case 'object':
-      return generateMockObject(definition as MockObjectDefinition, ctx, depth);
+      return generateMockObject(definition as MockObjectDefinition, ctx, depth, slot);
     case 'array':
-      return generateMockArray(definition as MockArrayDefinition, ctx, depth, name);
+      return generateMockArray(definition as MockArrayDefinition, ctx, depth, { name: slot.name, parent: slot.parent });
     case 'record':
-      return generateMockRecord(definition as MockRecordDefinition, ctx, depth, name);
+      return generateMockRecord(definition as MockRecordDefinition, ctx, depth, { name: slot.name, parent: slot.parent });
     default:
-      return generateMockPrimitive(definition as MockPrimitiveDefinition, ctx, name);
+      return generateMockPrimitive(definition as MockPrimitiveDefinition, ctx, slot);
   }
 }
 
 /**
- * Generate a mock object from its definition.
+ * Generate a mock object from its definition. Its fields see the object's type name
+ * (or, without one, the field holding it) as their parent, and share its people.
  */
-function generateMockObject(definition: MockObjectDefinition, ctx: GenContext, depth: number): Record<string, unknown> {
+function generateMockObject(definition: MockObjectDefinition, ctx: GenContext, depth: number, slot: Slot): Record<string, unknown> {
   const obj: Record<string, unknown> = {};
+  const inner: Slot = { parent: definition.name ?? slot.name, people: new Map() };
 
   for (const [fieldName, propDef] of Object.entries(definition.properties)) {
     // Handle optional fields with probability
@@ -137,7 +151,7 @@ function generateMockObject(definition: MockObjectDefinition, ctx: GenContext, d
       continue;
     }
 
-    obj[fieldName] = generateFromDefinition(propDef.mock, ctx, depth + 1, fieldName);
+    obj[fieldName] = generateFromDefinition(propDef.mock, ctx, depth + 1, { ...inner, name: fieldName });
   }
 
   return obj;
@@ -147,7 +161,7 @@ function generateMockObject(definition: MockObjectDefinition, ctx: GenContext, d
  * Generate a mock array from its definition. Items take the list's name, so
  * `emails: string[]` yields emails.
  */
-function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, depth: number, name?: string): unknown[] {
+function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, depth: number, slot: Slot): unknown[] {
   const { options } = ctx;
   // Determine array length
   let length = 3; // Default
@@ -167,7 +181,7 @@ function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, dep
 
   const arr: unknown[] = [];
   for (let i = 0; i < length; i++) {
-    arr.push(generateFromDefinition(definition.itemType, ctx, depth + 1, name));
+    arr.push(generateFromDefinition(definition.itemType, ctx, depth + 1, slot));
   }
 
   return arr;
@@ -179,7 +193,7 @@ const RECORD_KEYS = ['alpha', 'bravo', 'charlie', 'delta', 'echo', 'foxtrot', 'g
 /**
  * Generate a mock map: a few distinct keys, each with a generated value (named after the map).
  */
-function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, depth: number, name?: string): Record<string, unknown> {
+function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, depth: number, slot: Slot): Record<string, unknown> {
   const count = Math.max(0, Math.min(definition.keyCount ?? 3, 20));
   const keys: string[] = [];
   if (definition.keyType === 'number') {
@@ -194,7 +208,7 @@ function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, d
     for (let i = 0; i < count; i++) keys.push(i < pool.length ? pool[i] : `key${i + 1}`);
   }
   const obj: Record<string, unknown> = {};
-  for (const key of keys) obj[key] = generateFromDefinition(definition.valueType, ctx, depth + 1, name);
+  for (const key of keys) obj[key] = generateFromDefinition(definition.valueType, ctx, depth + 1, slot);
   return obj;
 }
 
@@ -203,7 +217,7 @@ function generateMockRecord(definition: MockRecordDefinition, ctx: GenContext, d
  * `default`, then `enum`, then the declared constraints (format, pattern, min/max),
  * then the field-name hint, then the source's example value, then a generic value.
  */
-function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenContext, name?: string): unknown {
+function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenContext, slot: Slot = {}): unknown {
   const { rng } = ctx;
   // Use custom default if specified
   if (definition.default !== undefined) {
@@ -215,11 +229,11 @@ function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenCont
     return pick(rng, definition.enum);
   }
 
-  const hint = name ? classifyField(name) : null;
+  const hint = slot.name ? classifyField(slot.name, slot.parent) : null;
 
   switch (definition.type) {
     case 'string':
-      return generateMockString(definition, ctx, hint);
+      return generateMockString(definition, ctx, hint, slot.people);
     case 'number':
       return generateMockNumber(definition, ctx, hint);
     case 'boolean':
@@ -231,7 +245,7 @@ function generateMockPrimitive(definition: MockPrimitiveDefinition, ctx: GenCont
     case 'any':
     default: {
       // Untyped: the name's natural type when it suggests one, else a random primitive
-      if (hint) return generateMockPrimitive({ type: hint.natural }, ctx, name);
+      if (hint) return generateMockPrimitive({ type: hint.natural }, ctx, slot);
       const types = ['string', 'number', 'boolean'] as const;
       return generateMockPrimitive({ type: pick(rng, types) }, ctx);
     }
@@ -246,15 +260,22 @@ function pick<T>(rng: Rng, list: readonly T[]): T {
 /**
  * Generate a mock string value.
  */
-function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext, hint: FieldHint | null = null): string {
+function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext, hint: FieldHint | null = null, people?: Map<string, Person>): string {
   const { rng } = ctx;
+  // One person per role per record, drawn when first needed (seeded order is stable)
+  const linked = (part: PersonPart): string | undefined => {
+    if (!people || !hint?.person) return undefined;
+    let p = people.get(hint.person.role);
+    if (!p) { p = newPerson(rng); people.set(hint.person.role, p); }
+    return personPart(p, part);
+  };
   // Handle specific formats
   if (definition.format) {
     switch (definition.format) {
       case 'uuid':
         return hints.uuid(rng);
       case 'email':
-        return hints.email(rng);
+        return linked('email') ?? hints.email(rng);
       case 'url':
       case 'uri':
         return hints.url(rng);
@@ -263,7 +284,7 @@ function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext
       case 'address':
         return hints.address(rng);
       case 'name':
-        return hints.fullName(rng);
+        return linked('full') ?? hints.fullName(rng);
       case 'sentence':
         return hints.description(rng);
       case 'paragraph':
@@ -298,6 +319,7 @@ function generateMockString(definition: MockPrimitiveDefinition, ctx: GenContext
   if (hint) {
     let value: string | undefined;
     if (hint.date) value = generateDate(ctx, hint.date);
+    else if (hint.person && people) value = linked(hint.person.part);
     else if (hint.string && !(hint.weak && example !== undefined)) value = hint.string(rng);
     else if (hint.number && !hint.string) value = String(generateMockNumber({ type: 'number' }, ctx, hint));
     if (value !== undefined && fits(value)) return value;

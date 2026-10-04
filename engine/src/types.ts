@@ -32,6 +32,8 @@ export type MockDefinition =
  */
 export interface MockObjectDefinition {
   type: 'object';
+  /** The source type's name (`Address`), when it has one: field-name hints read it as context. */
+  name?: string;
   /** Mock configuration for each property */
   properties: Record<string, MockPropertyDefinition>;
 }

@@ -8,7 +8,9 @@
  * - `!` marks a field required; anything else is optional
  * - Enums pick one of their values; custom scalars map by name (Date/Time -> date)
  * - References to other types in the same SDL become nested objects, with a cap
- *   for cycles (a type may re-enter its own path once) and for overall size.
+ *   for cycles (a type may re-enter its own path once) and for overall size. Types
+ *   expand breadth-first, so the size budget is spent on the shallow levels first
+ *   and one deep first field can't starve its siblings.
  *
  * Offsets stay aligned with the pasted source: comments and strings are blanked to
  * same-length whitespace before parsing, so spans index the original text.
@@ -16,6 +18,7 @@
 
 import type { MockDefinition, MockPrimitiveDefinition, MockPropertyDefinition } from './types';
 import type { SchemaImport, ValueSpan } from './codeImport';
+import { blankLiterals, nextOf, type LiteralKind } from './scan';
 
 /** Keys never written into a config map (would hit Object.prototype's setter). */
 const UNSAFE_KEY = '__proto__';
@@ -25,6 +28,8 @@ const MAX_DEPTH = 4;
 const MAX_REPEAT = 2;
 /** Total fields expanded per import, so wide, highly connected schemas stay small. */
 const FIELD_BUDGET = 2000;
+/** List wrappers kept per field (`[[[T]]]`); the generator stops nesting at 10 anyway. */
+const MAX_LIST_NESTING = 8;
 
 const BUILTIN_SCALARS: Record<string, MockPrimitiveDefinition> = {
   String: { type: 'string' },
@@ -39,19 +44,18 @@ function blankFences(src: string): string {
   return src.replace(/^[ \t]*(?:```|~~~)[^\n`]*$/gm, (m) => ' '.repeat(m.length));
 }
 
+const ALL_LITERALS: ReadonlySet<LiteralKind> = new Set(['string', 'comment']);
+
 /** Blank GraphQL comments and string / block-string literals (descriptions, directive
  *  arguments) to spaces, keeping newlines, so offsets match the source. */
 function maskGraphQL(src: string): string {
-  return src.replace(/"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|#[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
+  return blankLiterals(src, { triple: true, hash: true }, ALL_LITERALS);
 }
 
 /** Like maskGraphQL, but also blanks TypeScript strings/templates/comments: used for
  *  detection, where the input may be either language. */
 function maskForDetection(src: string): string {
-  return src.replace(
-    /"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`|#[^\n]*|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
-    (m) => m.replace(/[^\n]/g, ' '),
-  );
+  return blankLiterals(src, { triple: true, single: true, template: true, hash: true, slash: true }, ALL_LITERALS);
 }
 
 const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
@@ -69,8 +73,17 @@ const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 export function looksLikeGraphQL(code: string): boolean {
   const raw = blankFences(code ?? '');
   const text = maskForDetection(raw);
-  // An object definition to mock is required
-  if (!/^[ \t]*(?:extend[ \t]+)?(?:type|interface|input)[ \t]+[A-Za-z_]\w*[^{}=;]*\{/m.test(text)) return false;
+  // Every pattern below is linear: none may scan past a line end per match, and
+  // multi-line lookups ("the next `{`") read precomputed next-character tables.
+  const nextBrace = nextOf(text, '{');
+  const nextStop = nextOf(text, '{}=;');
+  const nextBraceOrClose = nextOf(text, '{}');
+  const nextParen = nextOf(text, ')');
+  const headers = (re: RegExp) => [...text.matchAll(re)].map((m) => m.index! + m[0].length);
+
+  // An object definition to mock is required: a header whose next `{}=;` is a `{`
+  const objectHeaders = headers(/^[ \t]*(?:extend[ \t]+)?(?:type|interface|input)[ \t]+[A-Za-z_]\w*/gm);
+  if (!objectHeaders.some((h) => text[nextStop[h]] === '{')) return false;
 
   const tsHard =
     /[;<>]|\?\s*:|=>|\bextends\b|\breadonly\s+\w/.test(text) ||
@@ -80,16 +93,27 @@ export function looksLikeGraphQL(code: string): boolean {
 
   const strong =
     /^[ \t]*"""/m.test(raw) ||
-    /^[ \t]*(?:schema\s*\{|scalar[ \t]+[A-Za-z_]|directive[ \t]+@|extend[ \t]+(?:type|interface|input|enum|union|schema)\b|input[ \t]+[A-Za-z_]\w*[^{}]*\{|union[ \t]+[A-Za-z_]\w*[^=\n]*=)/m.test(text) ||
+    /^[ \t]*(?:schema\s*\{|scalar[ \t]+[A-Za-z_]|directive[ \t]+@|extend[ \t]+(?:type|interface|input|enum|union|schema)\b|union[ \t]+[A-Za-z_][^=\n]*=)/m.test(text) ||
+    headers(/^[ \t]*input[ \t]+[A-Za-z_]\w*/gm).some((h) => text[nextBraceOrClose[h]] === '{') ||
     /^[ \t]*(?:type|interface)[ \t]+[A-Za-z_]\w*[ \t]+implements\b/m.test(text);
   if (strong) return true;
 
+  // `type X {` / `type X @dir(...) {` (no `=`) is not valid TypeScript
+  const bareTypes = headers(/^[ \t]*type[ \t]+[A-Za-z_]\w*\s*/gm).filter((h) => text[h] === '{' || (text[h] === '@' && nextBrace[h] < text.length)).length;
+  // Field arguments: `name(args):` (several headers can share one `)`, so each is checked once)
+  const colonAfter = new Map<number, boolean>();
+  const argFields = headers(/^[ \t]*\w+\s*\(/gm).filter((h) => {
+    const close = nextParen[h];
+    if (close >= text.length) return false;
+    if (!colonAfter.has(close)) colonAfter.set(close, /\s*:/y.exec(text.slice(close + 1)) !== null);
+    return colonAfter.get(close)!;
+  }).length;
   const gql =
-    count(text, /^[ \t]*type[ \t]+[A-Za-z_]\w*\s*(?:@[^{]*)?\{/gm) + // `type X {` (no `=`) is not valid TypeScript
+    bareTypes +
     count(text, /[\w\]][ \t]*!/g) +
     count(text, /:\s*\[/g) +
     count(text, /:\s*\[*\s*(?:String|Int|Float|Boolean|ID)\b/g) +
-    count(text, /^[ \t]*\w+\s*\([^)]*\)\s*:/gm);
+    argFields;
   const ts = count(text, /:\s*(?:string|number|boolean|any|unknown|undefined|null|bigint|object)\b/g) + count(text, /\w\[\]/g);
   return gql > ts;
 }
@@ -142,27 +166,32 @@ function skipDirectives(text: string, i: number, end: number): number {
   }
 }
 
-/** Parse a type reference at `i`; returns it and the index just past it, or null. */
+/** Parse a type reference at `i`; returns it and the index just past it, or null.
+ *  Iterative (count the `[`s, read the name, then close each list), so a deeply
+ *  nested `[[[...` can't overflow the stack. */
 function parseTypeRef(text: string, i: number, end: number): { ref: TypeRef; end: number } | null {
   i = skipWs(text, i, end);
-  if (text[i] === '[') {
-    const inner = parseTypeRef(text, i + 1, end);
-    if (!inner) return null;
-    let j = skipWs(text, inner.end, end);
-    if (text[j] !== ']') return null;
-    j++;
-    const bang = skipWs(text, j, end);
-    const nonNull = text[bang] === '!';
-    return { ref: { kind: 'list', of: inner.ref, nonNull }, end: nonNull ? bang + 1 : j };
-  }
+  let lists = 0;
+  while (text[i] === '[') { lists++; i = skipWs(text, i + 1, end); }
   const m = /[A-Za-z_]\w*/y;
   m.lastIndex = i;
   const name = m.exec(text);
   if (!name) return null;
   const nameEnd = i + name[0].length;
-  const bang = skipWs(text, nameEnd, end);
-  const nonNull = text[bang] === '!';
-  return { ref: { kind: 'named', name: name[0], nonNull, start: i, end: nameEnd }, end: nonNull ? bang + 1 : nameEnd };
+  let bang = skipWs(text, nameEnd, end);
+  let nonNull = text[bang] === '!';
+  let ref: TypeRef = { kind: 'named', name: name[0], nonNull, start: i, end: nameEnd };
+  let after = nonNull ? bang + 1 : nameEnd;
+  for (let k = 0; k < lists; k++) {
+    let j = skipWs(text, after, end);
+    if (text[j] !== ']') return null;
+    j++;
+    bang = skipWs(text, j, end);
+    nonNull = text[bang] === '!';
+    ref = { kind: 'list', of: ref, nonNull };
+    after = nonNull ? bang + 1 : j;
+  }
+  return { ref, end: after };
 }
 
 /** Parse the fields of an object body `text[from, to)`. */
@@ -260,6 +289,9 @@ function collectDefinitions(text: string): { defs: Map<string, Definition>; root
   return { defs, root };
 }
 
+/** An object type waiting to be expanded: its fields go into `out`. */
+type Job = { typeName: string; def: ObjectDef; path: string[]; relPath: string; out: Record<string, MockPropertyDefinition> };
+
 type Ctx = {
   defs: Map<string, Definition>;
   budget: number;
@@ -267,9 +299,13 @@ type Ctx = {
   spanned: Set<string>;
   reported: Set<string>;
   root: string;
+  /** Breadth-first: object types are expanded in the order they are reached. */
+  queue: Job[];
+  recognized: string[];
+  unrecognized: string[];
 };
 
-type Resolved = { def: MockDefinition | null; capped?: boolean; recognized: string[]; unrecognized: string[] };
+type Resolved = { def: MockDefinition | null; capped?: boolean };
 
 /** Custom scalars map by name. */
 function customScalar(name: string): MockPrimitiveDefinition {
@@ -283,52 +319,50 @@ function customScalar(name: string): MockPrimitiveDefinition {
 
 /** Resolve a type reference to a mock definition. `path` lists the object types above. */
 function resolveRef(ref: TypeRef, ctx: Ctx, path: string[], listName: string): Resolved {
-  if (ref.kind === 'list') {
-    const inner = resolveRef(ref.of, ctx, path, listName);
-    if (inner.capped) return { def: { type: 'array', itemType: { type: 'null' }, length: 0 }, recognized: [], unrecognized: [] };
-    if (!inner.def) return inner;
-    return { ...inner, def: { type: 'array', itemType: inner.def } };
-  }
-  return resolveNamed(ref.name, ctx, path, listName, 0);
+  let lists = 0;
+  let inner: TypeRef = ref;
+  while (inner.kind === 'list') { lists++; inner = inner.of; }
+  const r = resolveNamed(inner.name, ctx, path, listName, 0);
+  if (lists === 0 || (!r.def && !r.capped)) return r;
+  // A capped type inside a list: an empty list
+  if (r.capped) return { def: { type: 'array', itemType: { type: 'null' }, length: 0 } };
+  let def = r.def!;
+  for (let k = 0; k < Math.min(lists, MAX_LIST_NESTING); k++) def = { type: 'array', itemType: def };
+  return { def };
 }
 
 function resolveNamed(name: string, ctx: Ctx, path: string[], listName: string, hops: number): Resolved {
-  const none: Resolved = { def: null, recognized: [], unrecognized: [] };
-  if (Object.prototype.hasOwnProperty.call(BUILTIN_SCALARS, name)) return { def: { ...BUILTIN_SCALARS[name] }, recognized: [], unrecognized: [] };
+  if (Object.prototype.hasOwnProperty.call(BUILTIN_SCALARS, name)) return { def: { ...BUILTIN_SCALARS[name] } };
   const def = ctx.defs.get(name);
-  if (!def) return none;
+  if (!def) return { def: null };
   switch (def.kind) {
     case 'scalar':
-      return { def: customScalar(name), recognized: [], unrecognized: [] };
+      return { def: customScalar(name) };
     case 'enum':
-      return { def: def.values.length ? { type: 'string', enum: [...def.values] } : { type: 'string' }, recognized: [], unrecognized: [] };
+      return { def: def.values.length ? { type: 'string', enum: [...def.values] } : { type: 'string' } };
     case 'union':
       // A union mocks as its first member type
-      return hops < 8 && def.members.length ? resolveNamed(def.members[0], ctx, path, listName, hops + 1) : none;
+      return hops < 8 && def.members.length ? resolveNamed(def.members[0], ctx, path, listName, hops + 1) : { def: null };
     case 'object': {
       if (path.length > MAX_DEPTH || path.filter((p) => p === name).length >= MAX_REPEAT || ctx.budget <= 0) {
-        return { def: null, capped: true, recognized: [], unrecognized: [] };
+        return { def: null, capped: true };
       }
-      const body = buildObject(name, def, ctx, [...path, name], listName);
-      return { def: { type: 'object', properties: body.properties }, recognized: body.recognized, unrecognized: body.unrecognized };
+      // Filled in when its turn in the queue comes
+      const properties: Record<string, MockPropertyDefinition> = {};
+      ctx.queue.push({ typeName: name, def, path: [...path, name], relPath: listName, out: properties });
+      return { def: { type: 'object', name, properties } };
     }
   }
 }
 
-/** Build the properties of object type `typeName`. `relPath` prefixes the field lists. */
-function buildObject(typeName: string, def: ObjectDef, ctx: Ctx, path: string[], relPath: string): {
-  properties: Record<string, MockPropertyDefinition>;
-  recognized: string[];
-  unrecognized: string[];
-} {
-  const properties: Record<string, MockPropertyDefinition> = {};
-  const recognized: string[] = [];
+/** Expand one object type's fields into `job.out`. `relPath` prefixes the field lists. */
+function buildObject(job: Job, ctx: Ctx): void {
+  const { typeName, def, path, relPath, out } = job;
   // Unrecognized fields are reported once per SOURCE field (bare for the root type,
   // `Type.field` otherwise), not once per path a type is expanded on.
-  const unrecognized: string[] = [];
   const report = (field: string) => {
     const label = typeName === ctx.root ? field : `${typeName}.${field}`;
-    if (!ctx.reported.has(label)) { ctx.reported.add(label); unrecognized.push(label); }
+    if (!ctx.reported.has(label)) { ctx.reported.add(label); ctx.unrecognized.push(label); }
   };
   def.unparsed.forEach(report);
 
@@ -339,9 +373,8 @@ function buildObject(typeName: string, def: ObjectDef, ctx: Ctx, path: string[],
     const r = resolveRef(field.ref, ctx, path, listName);
     const mock: MockDefinition | null = r.capped ? { type: 'null' } : r.def;
     if (!mock) { report(field.name); continue; }
-    properties[field.name] = { mock, optional: !field.ref.nonNull };
-    recognized.push(listName, ...r.recognized);
-    unrecognized.push(...r.unrecognized);
+    out[field.name] = { mock, optional: !field.ref.nonNull };
+    ctx.recognized.push(listName);
 
     // Span of the scalar type name, once per source field (patch target)
     let inner: TypeRef = field.ref;
@@ -354,7 +387,6 @@ function buildObject(typeName: string, def: ObjectDef, ctx: Ctx, path: string[],
       ctx.spans.push({ fieldPath: `${typeName}.${field.name}`, mockKey: `${typeName}.${field.name}`, start: inner.start, end: inner.end, quote: '' });
     }
   }
-  return { properties, recognized, unrecognized };
 }
 
 /**
@@ -369,8 +401,14 @@ export function parseGraphQLSchema(code: string): SchemaImport | null {
   const rootDef = root ? defs.get(root) : undefined;
   if (!root || !rootDef || rootDef.kind !== 'object') return null;
 
-  const ctx: Ctx = { defs, budget: FIELD_BUDGET, spans: [], spanned: new Set(), reported: new Set(), root };
-  const { properties, recognized, unrecognized } = buildObject(root, rootDef, ctx, [root], '');
+  const properties: Record<string, MockPropertyDefinition> = {};
+  const ctx: Ctx = {
+    defs, budget: FIELD_BUDGET, spans: [], spanned: new Set(), reported: new Set(), root,
+    queue: [{ typeName: root, def: rootDef, path: [root], relPath: '', out: properties }],
+    recognized: [], unrecognized: [],
+  };
+  for (let q = 0; q < ctx.queue.length; q++) buildObject(ctx.queue[q], ctx);
+  const { recognized, unrecognized } = ctx;
 
   return {
     config: { type: 'graphql-type', name: root, root: { type: 'object', properties } },

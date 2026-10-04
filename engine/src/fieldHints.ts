@@ -39,6 +39,36 @@ export interface FieldHint {
   date?: DateHint;
   /** A guess at a domain value (status, role, category): a sample value from the source wins over it. */
   weak?: boolean;
+  /**
+   * A part of a person (name, email, username). Fields with the same `role` in one
+   * record describe the same person ('' = the record itself, else e.g. 'customer'
+   * for customerName/customerEmail), so a record's name and email match.
+   */
+  person?: { role: string; part: PersonPart };
+}
+
+export type PersonPart = 'first' | 'last' | 'full' | 'email' | 'username';
+
+/** One generated person: every part of a record's name, email and username derives from it. */
+export interface Person {
+  first: string;
+  last: string;
+  /** Username suffix and email domain, drawn once so repeated reads agree. */
+  n: number;
+  domain: string;
+}
+
+export const newPerson = (rng: Rng): Person => ({ first: firstName(rng), last: lastName(rng), n: int(rng, 1, 99), domain: pick(rng, EMAIL_DOMAINS) });
+
+/** The `part` of `p`, in the same shapes as the unlinked makers below. */
+export function personPart(p: Person, part: PersonPart): string {
+  switch (part) {
+    case 'first': return p.first;
+    case 'last': return p.last;
+    case 'full': return `${p.first} ${p.last}`;
+    case 'email': return `${p.first}.${p.last}@${p.domain}`.toLowerCase();
+    case 'username': return `${p.first[0]}${p.last}${p.n}`.toLowerCase();
+  }
 }
 
 // -- Word lists -------------------------------------------------------------
@@ -167,6 +197,8 @@ function singular(t: string): string {
 const str = (make: (rng: Rng) => string, weak = false): FieldHint => ({ natural: 'string', string: make, ...(weak ? { weak } : {}) });
 const num = (min: number, max: number, decimals = 0, extra: Partial<NumberHint> = {}): FieldHint => ({ natural: 'number', number: { min, max, decimals, ...extra } });
 const listOf = (list: readonly string[]) => (rng: Rng) => pick(rng, list);
+/** A person field: `make` for unlinked use (list items), `person` to link it within a record. */
+const who = (make: (rng: Rng) => string, role: string, part: PersonPart): FieldHint => ({ natural: 'string', string: make, person: { role, part } });
 
 const BOOLEAN_PREFIXES = new Set(['is', 'has', 'can', 'should', 'was', 'did', 'will', 'allow', 'allows', 'needs', 'show', 'enable']);
 const BOOLEAN_WORDS = new Set(['active', 'enabled', 'disabled', 'verified', 'deleted', 'archived', 'visible', 'hidden', 'confirmed', 'completed', 'done']);
@@ -183,6 +215,24 @@ const BIG_MONEY = new Set(['salary', 'income', 'revenue', 'budget', 'wage']);
 const SMALL_COUNTS = new Set(['count', 'quantity', 'qty', 'total']);
 const BIG_COUNTS = new Set(['view', 'like', 'follower', 'click', 'download', 'visit', 'share', 'subscriber']);
 const ORDINALS = new Set(['level', 'rank', 'priority', 'position', 'order', 'index', 'step', 'page', 'sequence']);
+/** `lastX` events that are dates (lastLogin, lastSeen); `lastUpdated`-style past participles count too. */
+const LAST_EVENTS = new Set(['login', 'logout', 'signin', 'seen', 'visit', 'sync', 'activity', 'access', 'run', 'contact', 'payment', 'order', 'purchase']);
+/** Name words that describe the record's own person (userName, displayName), not another party (authorName). */
+const SELF_WORDS = new Set(['user', 'full', 'display', 'first', 'last', 'given', 'family', 'sur', 'middle', 'legal', 'real', 'nick', 'primary', 'personal', 'work']);
+const PERSON_PARTS = new Set(['name', 'email', 'address', 'username', 'handle', 'login', 'nickname', 'firstname', 'lastname', 'surname', 'fullname']);
+
+// Parent context (the enclosing type, or the field holding the object): `Address.state`
+// is a state code, `Product.name` a title, `PageInfo.total` a count.
+const PERSON_PARENTS = new Set([
+  'user', 'person', 'people', 'customer', 'author', 'member', 'employee', 'contact', 'account', 'profile', 'owner',
+  'student', 'teacher', 'patient', 'player', 'friend', 'admin', 'staff', 'guest', 'driver', 'client', 'attendee',
+  'participant', 'follower', 'buyer', 'seller', 'recipient', 'sender', 'assignee', 'reviewer', 'manager', 'agent',
+  'applicant', 'candidate', 'subscriber', 'speaker', 'instructor', 'creator', 'host', 'viewer', 'editor', 'signer',
+]);
+const PLACE_PARENTS = new Set(['address', 'addr', 'location', 'place', 'venue', 'store', 'branch', 'office', 'shipping', 'billing', 'mailing', 'home', 'geo', 'warehouse']);
+const COUNT_PARENTS = new Set(['page', 'pagination', 'paging', 'meta', 'metadata', 'stat', 'statistic', 'count', 'connection', 'result', 'search', 'list', 'collection']);
+/** Generic root names (sample JSON is "Data", JSON Schema "Schema"): no context. */
+const GENERIC_PARENTS = new Set(['data', 'schema', 'root', 'record', 'row', 'entry', 'object', 'response', 'payload', 'body']);
 
 /**
  * What a field name suggests, or null when it suggests nothing in particular.
@@ -190,7 +240,10 @@ const ORDINALS = new Set(['level', 'rank', 'priority', 'position', 'order', 'ind
  * digits ignored) and mostly keys on the LAST word, so `paid`/`valid` never look like
  * ids, `ipAddress` is an IP rather than a street, and `commentCount` is a count.
  */
-export function classifyField(name: string): FieldHint | null {
+export function classifyField(name: string, parent?: string): FieldHint | null {
+  const ptokens = parent ? fieldTokens(parent).map(singular).filter((t) => !/^\d+$/.test(t)) : [];
+  const noParent = ptokens.every((t) => GENERIC_PARENTS.has(t));
+  const parentIs = (set: Set<string>) => ptokens.some((t) => set.has(t));
   let tokens = fieldTokens(name).map(singular);
   const words = tokens.filter((t) => !/^\d+$/.test(t));
   if (words.length > 0) tokens = words;
@@ -201,6 +254,8 @@ export function classifyField(name: string): FieldHint | null {
   const first = tokens[0];
   const lone = tokens.length === 1;
   const isHead = (...w: string[]) => w.includes(head);
+  // Whose person a name/email field describes: '' = this record's own, else the other party's words
+  const role = tokens.filter((t) => !SELF_WORDS.has(t) && !PERSON_PARTS.has(t)).join('.');
 
   // Booleans: isX, hasX, canX, ... (and a few bare adjectives)
   if (!lone && BOOLEAN_PREFIXES.has(first)) return { natural: 'boolean' };
@@ -218,6 +273,9 @@ export function classifyField(name: string): FieldHint | null {
     const future = tokens.some((t) => FUTURE_WORDS.has(t));
     return { natural: 'date', date: future ? { minYearsAgo: -1, maxYearsAgo: 0 } : { minYearsAgo: 0, maxYearsAgo: 1 } };
   }
+  if (first === 'last' && !lone && (LAST_EVENTS.has(head) || (head.endsWith('ed') && head.length > 4))) {
+    return { natural: 'date', date: { minYearsAgo: 0, maxYearsAgo: 1 } };
+  }
   if (head === 'deadline') return { natural: 'date', date: { minYearsAgo: -1, maxYearsAgo: 0 } };
   if (head === 'timezone' || (head === 'zone' && prev === 'time')) return str(listOf(TIMEZONES));
 
@@ -225,7 +283,7 @@ export function classifyField(name: string): FieldHint | null {
   if (isHead('id', 'uuid', 'guid')) return { natural: 'string', string: uuid, number: { min: 1, max: 99999, decimals: 0 } };
 
   // Contact + web
-  if (has('email') && isHead('email', 'address')) return str(email);
+  if (has('email') && isHead('email', 'address')) return who(email, role, 'email');
   if (has(...PHONE_WORDS) && isHead(...PHONE_WORDS, 'number')) return str(phone);
   if (has(...IMAGE_WORDS) && isHead(...IMAGE_WORDS, 'url', 'uri', 'src', 'link', 'href')) return str(has('avatar') ? avatarUrl : imageUrl);
   if (isHead('website', 'homepage', 'site')) return str(website);
@@ -233,10 +291,10 @@ export function classifyField(name: string): FieldHint | null {
   if (head === 'ip' || (has('ip') && head === 'address')) return str(ipAddress);
 
   // People
-  if (head === 'username' || (head === 'name' && first === 'user') || isHead('handle', 'login', 'nickname')) return str(username);
-  if (head === 'firstname' || (head === 'name' && has('first', 'given', 'middle'))) return str(firstName);
-  if (isHead('lastname', 'surname') || (head === 'name' && has('last', 'family', 'sur'))) return str(lastName);
-  if (head === 'fullname') return str(fullName);
+  if (head === 'username' || (head === 'name' && first === 'user') || isHead('handle', 'login', 'nickname')) return who(username, role, 'username');
+  if (head === 'firstname' || (head === 'name' && has('first', 'given', 'middle'))) return has('middle') ? str(firstName) : who(firstName, role, 'first');
+  if (isHead('lastname', 'surname') || (head === 'name' && has('last', 'family', 'sur'))) return who(lastName, role, 'last');
+  if (head === 'fullname') return who(fullName, role, 'full');
 
   // Places
   if (isHead('zip', 'zipcode', 'postcode') || (has('postal', 'zip') && head === 'code')) {
@@ -247,8 +305,8 @@ export function classifyField(name: string): FieldHint | null {
   if (has('country') && isHead('code', 'iso')) return str(countryCode);
   if (has('country') && isHead('country', 'name')) return str(country);
   if (isHead('city', 'town') || (has('city') && head === 'name')) return str(city);
-  if (isHead('province', 'region') || (head === 'state' && has(...PLACE_CONTEXT))) return str(stateCode);
-  if (head === 'street' || (has('address', 'street') && head === 'line')) return str(streetAddress);
+  if (isHead('province', 'region') || (head === 'state' && (has(...PLACE_CONTEXT) || parentIs(PLACE_PARENTS)))) return str(stateCode);
+  if (head === 'street' || (head === 'line' && (has('address', 'street') || parentIs(PLACE_PARENTS)))) return str(streetAddress);
   if (head === 'address') return str(address);
 
   // Organizations
@@ -256,11 +314,19 @@ export function classifyField(name: string): FieldHint | null {
 
   // Names (after places/companies, so cityName/companyName land above)
   if (head === 'name') {
-    if (lone || PERSON_NAME_PREFIXES.has(first)) return str(fullName);
+    if (lone) {
+      if (noParent || parentIs(PERSON_PARENTS)) return who(fullName, role, 'full');
+      if (ptokens.some((t) => COMPANY_WORDS.includes(t) || t === 'org' || t === 'team')) return str(company);
+      if (parentIs(new Set(['city', 'town']))) return str(city);
+      if (parentIs(new Set(['country']))) return str(country);
+      if (parentIs(new Set(['file', 'attachment', 'document', 'upload']))) return str(fileName);
+      return str(title);
+    }
+    if (PERSON_NAME_PREFIXES.has(first)) return who(fullName, role, 'full');
     if (has('file')) return str(fileName);
     return str(title);
   }
-  if (isHead('author', 'assignee', 'recipient', 'sender')) return str(fullName);
+  if (isHead('author', 'assignee', 'recipient', 'sender')) return who(fullName, role, 'full');
 
   // Text
   if (isHead('title', 'headline', 'subject', 'heading', 'caption', 'label')) return str(title);
@@ -288,6 +354,8 @@ export function classifyField(name: string): FieldHint | null {
   if (head === 'age') return num(18, 90);
   if (BIG_MONEY.has(head)) return num(25000, 250000, 2);
   if (MONEY.has(head)) return num(1, 500, 2);
+  // `total` is money (Order.total, grandTotal) unless the parent is a page/count wrapper
+  if (head === 'total' && !parentIs(COUNT_PARENTS)) return num(1, 500, 2);
   if (isHead('rating', 'star')) return num(1, 5, 1);
   if (SMALL_COUNTS.has(head) || (first === 'num' && !lone) || (first === 'number' && has('of'))) return num(0, 50);
   if (BIG_COUNTS.has(head)) return num(0, 10000);
