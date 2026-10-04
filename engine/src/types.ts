@@ -32,6 +32,9 @@ export type MockDefinition =
  */
 export interface MockObjectDefinition {
   type: 'object';
+  /** The declared type this object came from (`User`, `Address`), when known: gives
+   *  field-name hints context (`Address.state` is a US state, `Product.name` a product) */
+  typeName?: string;
   /** Mock configuration for each property */
   properties: Record<string, MockPropertyDefinition>;
 }

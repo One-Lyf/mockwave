@@ -16,6 +16,7 @@
 
 import type { MockDefinition, MockPrimitiveDefinition, MockPropertyDefinition } from './types';
 import type { SchemaImport, ValueSpan } from './codeImport';
+import { bracketTable, maskRegions, nextAt, nextIndexTable } from './scan';
 
 /** Keys never written into a config map (would hit Object.prototype's setter). */
 const UNSAFE_KEY = '__proto__';
@@ -25,6 +26,8 @@ const MAX_DEPTH = 4;
 const MAX_REPEAT = 2;
 /** Total fields expanded per import, so wide, highly connected schemas stay small. */
 const FIELD_BUDGET = 2000;
+/** Max list nesting in one type reference (`[[[Int]]]` is 3). */
+const MAX_LIST_DEPTH = 10;
 
 const BUILTIN_SCALARS: Record<string, MockPrimitiveDefinition> = {
   String: { type: 'string' },
@@ -40,18 +43,15 @@ function blankFences(src: string): string {
 }
 
 /** Blank GraphQL comments and string / block-string literals (descriptions, directive
- *  arguments) to spaces, keeping newlines, so offsets match the source. */
+ *  arguments) to spaces, keeping newlines, so offsets match the source. One linear pass. */
 function maskGraphQL(src: string): string {
-  return src.replace(/"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|#[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
+  return maskRegions(src, { blockStrings: true, hashComments: true }, () => 'all');
 }
 
 /** Like maskGraphQL, but also blanks TypeScript strings/templates/comments: used for
  *  detection, where the input may be either language. */
 function maskForDetection(src: string): string {
-  return src.replace(
-    /"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`|#[^\n]*|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
-    (m) => m.replace(/[^\n]/g, ' '),
-  );
+  return maskRegions(src, { blockStrings: true, singleQuotes: true, backticks: true, hashComments: true, slashComments: true }, () => 'all');
 }
 
 const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
@@ -69,8 +69,11 @@ const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 export function looksLikeGraphQL(code: string): boolean {
   const raw = blankFences(code ?? '');
   const text = maskForDetection(raw);
+  // Every check below is linear: "scan on to the next `{`" is a table lookup, not a
+  // regex like `[^{}=;]*\{` that rescans to the end of the paste from every header.
+  const objStop = nextIndexTable(text, '{}=;');
   // An object definition to mock is required
-  if (!/^[ \t]*(?:extend[ \t]+)?(?:type|interface|input)[ \t]+[A-Za-z_]\w*[^{}=;]*\{/m.test(text)) return false;
+  if (!someHeader(text, /^[ \t]*(?:extend[ \t]+)?(?:type|interface|input)[ \t]+[A-Za-z_]/gm, (e) => text[nextAt(objStop, e)] === '{')) return false;
 
   const tsHard =
     /[;<>]|\?\s*:|=>|\bextends\b|\breadonly\s+\w/.test(text) ||
@@ -78,21 +81,57 @@ export function looksLikeGraphQL(code: string): boolean {
     /\btype\s+\w+\s*=\s*\{/.test(text);
   if (tsHard) return false;
 
+  const braces = nextIndexTable(text, '{}');
   const strong =
     /^[ \t]*"""/m.test(raw) ||
-    /^[ \t]*(?:schema\s*\{|scalar[ \t]+[A-Za-z_]|directive[ \t]+@|extend[ \t]+(?:type|interface|input|enum|union|schema)\b|input[ \t]+[A-Za-z_]\w*[^{}]*\{|union[ \t]+[A-Za-z_]\w*[^=\n]*=)/m.test(text) ||
+    /^[ \t]*(?:schema\s*\{|scalar[ \t]+[A-Za-z_]|directive[ \t]+@|extend[ \t]+(?:type|interface|input|enum|union|schema)\b|union[ \t]+[A-Za-z_]\w*[^=\n]*=)/m.test(text) ||
+    someHeader(text, /^[ \t]*input[ \t]+[A-Za-z_]/gm, (e) => text[nextAt(braces, e)] === '{') ||
     /^[ \t]*(?:type|interface)[ \t]+[A-Za-z_]\w*[ \t]+implements\b/m.test(text);
   if (strong) return true;
 
+  const openBrace = nextIndexTable(text, '{');
+  const closeParen = nextIndexTable(text, ')');
   const gql =
-    count(text, /^[ \t]*type[ \t]+[A-Za-z_]\w*\s*(?:@[^{]*)?\{/gm) + // `type X {` (no `=`) is not valid TypeScript
+    // `type X {` / `type X @dir {` (no `=`) is not valid TypeScript
+    countHeaders(text, /^[ \t]*type[ \t]+[A-Za-z_]\w*\s*/gm, (e) => {
+      if (text[e] === '{') return e + 1;
+      if (text[e] !== '@') return -1;
+      const k = nextAt(openBrace, e);
+      return k < 0 ? -1 : k + 1;
+    }) +
     count(text, /[\w\]][ \t]*!/g) +
     count(text, /:\s*\[/g) +
     count(text, /:\s*\[*\s*(?:String|Int|Float|Boolean|ID)\b/g) +
-    count(text, /^[ \t]*\w+\s*\([^)]*\)\s*:/gm);
+    // Field arguments: `name(arg: T): R`
+    countHeaders(text, /^[ \t]*\w+\s*\(/gm, (e) => {
+      const k = nextAt(closeParen, e);
+      if (k < 0) return -1;
+      let j = k + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      return text[j] === ':' ? j + 1 : -1;
+    });
   const ts = count(text, /:\s*(?:string|number|boolean|any|unknown|undefined|null|bigint|object)\b/g) + count(text, /\w\[\]/g);
   return gql > ts;
 }
+
+/**
+ * Count non-overlapping matches of "`header` then whatever `accept` checks", the way
+ * a `/g` regex would: `accept(end)` gets the offset just past the header and returns
+ * the full match's end, or -1. A failed candidate retries one char later.
+ */
+function countHeaders(text: string, header: RegExp, accept: (end: number) => number): number {
+  let n = 0;
+  header.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = header.exec(text)) !== null) {
+    const end = accept(m.index + m[0].length);
+    if (end >= 0) { n++; header.lastIndex = Math.max(end, m.index + 1); } else header.lastIndex = m.index + 1;
+  }
+  return n;
+}
+
+const someHeader = (text: string, header: RegExp, ok: (end: number) => boolean) =>
+  countHeaders(text, header, (e) => (ok(e) ? e : -1)) > 0;
 
 /** A GraphQL type reference: `Name`, `Name!`, `[Ref]`, `[Ref]!`. */
 type TypeRef =
@@ -142,18 +181,15 @@ function skipDirectives(text: string, i: number, end: number): number {
   }
 }
 
-/** Parse a type reference at `i`; returns it and the index just past it, or null. */
+/** Parse a type reference at `i`; returns it and the index just past it, or null.
+ *  Iterative, and lists nest at most MAX_LIST_DEPTH deep (deeper is unrecognized),
+ *  so a paste of thousands of `[` can't overflow the stack. */
 function parseTypeRef(text: string, i: number, end: number): { ref: TypeRef; end: number } | null {
   i = skipWs(text, i, end);
-  if (text[i] === '[') {
-    const inner = parseTypeRef(text, i + 1, end);
-    if (!inner) return null;
-    let j = skipWs(text, inner.end, end);
-    if (text[j] !== ']') return null;
-    j++;
-    const bang = skipWs(text, j, end);
-    const nonNull = text[bang] === '!';
-    return { ref: { kind: 'list', of: inner.ref, nonNull }, end: nonNull ? bang + 1 : j };
+  let lists = 0;
+  while (i < end && text[i] === '[') {
+    if (++lists > MAX_LIST_DEPTH) return null;
+    i = skipWs(text, i + 1, end);
   }
   const m = /[A-Za-z_]\w*/y;
   m.lastIndex = i;
@@ -162,7 +198,18 @@ function parseTypeRef(text: string, i: number, end: number): { ref: TypeRef; end
   const nameEnd = i + name[0].length;
   const bang = skipWs(text, nameEnd, end);
   const nonNull = text[bang] === '!';
-  return { ref: { kind: 'named', name: name[0], nonNull, start: i, end: nameEnd }, end: nonNull ? bang + 1 : nameEnd };
+  let ref: TypeRef = { kind: 'named', name: name[0], nonNull, start: i, end: nameEnd };
+  let j = nonNull ? bang + 1 : nameEnd;
+  for (let k = 0; k < lists; k++) {
+    j = skipWs(text, j, end);
+    if (text[j] !== ']') return null;
+    j++;
+    const b = skipWs(text, j, end);
+    const nn = text[b] === '!';
+    ref = { kind: 'list', of: ref, nonNull: nn };
+    if (nn) j = b + 1;
+  }
+  return { ref, end: j };
 }
 
 /** Parse the fields of an object body `text[from, to)`. */
@@ -176,17 +223,18 @@ function parseFields(text: string, from: number, to: number): { fields: FieldDef
     const nm = /[A-Za-z_]\w*/y;
     nm.lastIndex = i;
     const name = nm.exec(text);
-    const lineEnd = (() => { const n = text.indexOf('\n', i); return n < 0 || n > to ? to : n; })();
-    if (!name) { i = Math.max(lineEnd, i + 1); continue; }
+    // Only computed on the skip paths, which then jump past it: linear overall
+    const lineEnd = () => { const n = text.indexOf('\n', i); return n < 0 || n > to ? to : n; };
+    if (!name) { i = Math.max(lineEnd(), i + 1); continue; }
     let j = skipWs(text, i + name[0].length, to);
     if (text[j] === '(') {
       const c = matchClose(text, j, to, '(', ')');
       if (c < 0) { unparsed.push(name[0]); break; }
       j = skipWs(text, c + 1, to);
     }
-    if (text[j] !== ':') { unparsed.push(name[0]); i = Math.max(lineEnd, i + name[0].length); continue; }
+    if (text[j] !== ':') { unparsed.push(name[0]); i = Math.max(lineEnd(), i + name[0].length); continue; }
     const t = parseTypeRef(text, j + 1, to);
-    if (!t) { fields.push({ name: name[0], ref: null, nameStart: i }); i = Math.max(lineEnd, j + 1); continue; }
+    if (!t) { fields.push({ name: name[0], ref: null, nameStart: i }); i = Math.max(lineEnd(), j + 1); continue; }
     fields.push({ name: name[0], ref: t.ref, nameStart: i });
     // Skip directives and any default value (`= ...`, input types) to the next field
     let k = skipDirectives(text, t.end, to);
