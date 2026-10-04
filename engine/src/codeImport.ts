@@ -83,7 +83,15 @@ export interface SchemaImport {
  * - Tuples, function types, mapped and template literal types
  */
 export function parseTypeScriptSchema(code: string): SchemaImport | null {
-  const src = code ?? '';
+  stringMemo = new Map();
+  try {
+    return parseTypeScript(code ?? '');
+  } finally {
+    stringMemo = null;
+  }
+}
+
+function parseTypeScript(src: string): SchemaImport | null {
   // Comments blanked to same-length whitespace, so offsets (spans) still index `src`.
   const clean = blankComments(blankFences(src));
   // String/template contents blanked too, for the header search only: a `type Foo {`
@@ -102,17 +110,15 @@ export function parseTypeScriptSchema(code: string): SchemaImport | null {
   // above `User { owner: Account }` doesn't become the root); else the first one. Only
   // type positions count: a member named like a type (`User: string`, `User(): void`)
   // is not a reference.
-  const typeTexts = new Map<TsDecl, string>();
-  const typeText = (d: TsDecl) => {
-    let t = typeTexts.get(d);
-    if (t === undefined) {
-      t = masked.slice(d.start, d.end).replace(MEMBER_KEY, (_m, lead: string, key: string) => lead + ' '.repeat(key.length));
-      typeTexts.set(d, t);
-    }
-    return t;
-  };
-  const refersTo = (from: TsDecl, name: string) => new RegExp(`\\b${name}\\b`).test(typeText(from));
-  const root = candidates.find((c) => ![...decls.values()].some((d) => d !== c && refersTo(d, c.name))) ?? candidates[0];
+  // One pass: every identifier in each declaration's type positions (enum bodies hold
+  // only member names, so enums refer to nothing).
+  const referenced = new Set<string>();
+  for (const d of decls.values()) {
+    if (d.kind === 'enum') continue;
+    const typeText = masked.slice(d.start, d.end).replace(MEMBER_KEY, (_m, lead: string, key: string) => lead + ' '.repeat(key.length));
+    for (const id of new Set(typeText.match(/\w+/g) ?? [])) if (id !== d.name) referenced.add(id);
+  }
+  const root = candidates.find((c) => !referenced.has(c.name)) ?? candidates[0];
   const typeName = root.name;
   const [open, close] = root.body!;
   const schemaType: SchemaType = root.kind === 'interface' ? 'typescript-interface' : 'typescript-type';
@@ -266,24 +272,33 @@ function blankComments(src: string): string {
 }
 const COMMENTS_ONLY = new Set(['comment'] as const);
 
-/** Blank the contents of string and template literals (quotes and newlines kept). */
+/** Blank the contents of string and template literals (quotes and newlines kept). One
+ *  linear pass (see scan.ts). */
 function blankStrings(src: string): string {
-  return src.replace(
-    /"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`/g,
-    (m: string) => m[0] + m.slice(1, -1).replace(/[^\n]/g, ' ') + m[m.length - 1],
-  );
+  return blankLiterals(src, { single: true, template: true }, STRINGS_ONLY, true);
 }
+const STRINGS_ONLY = new Set(['string'] as const);
+
+/** Per text and quote char: an opener before this index has no closer (see scan.ts for
+ *  why that holds), so runs of unterminated quotes don't rescan to the line or text end.
+ *  Set for the duration of one parseTypeScriptSchema call. */
+let stringMemo: Map<string, Record<string, number>> | null = null;
 
 /** `text[i]` is a quote ('"`); return the index just past its closing quote. An
  *  unterminated quote (or a '/" string reaching a newline) is treated as a plain char. */
 function skipString(text: string, i: number): number {
   const q = text[i];
-  for (let j = i + 1; j < text.length; j++) {
+  let memo = stringMemo?.get(text);
+  if (stringMemo && !memo) { memo = {}; stringMemo.set(text, memo); }
+  if (memo && i < (memo[q] ?? -1)) return i + 1;
+  let j = i + 1;
+  for (; j < text.length; j++) {
     const c = text[j];
     if (c === '\\') { j++; continue; }
     if (c === q) return j + 1;
     if (c === '\n' && q !== '`') break;
   }
+  if (memo) memo[q] = j;
   return i + 1;
 }
 
@@ -291,11 +306,11 @@ const isQuote = (c: string) => c === '"' || c === "'" || c === '`';
 const OPENERS = '{([<';
 const CLOSERS = '})]>';
 
-/** Given `open` just past a `{`, return the index of its matching `}` (or -1).
+/** Given `open` just past a `{`, return the index of its matching `}` before `end` (or -1).
  *  String and template literals are skipped, so `s: "{"` can't unbalance it. */
-function matchBrace(text: string, open: number): number {
+function matchBrace(text: string, open: number, end = text.length): number {
   let depth = 1;
-  for (let i = open; i < text.length; i++) {
+  for (let i = open; i < end; i++) {
     const c = text[i];
     if (isQuote(c)) { i = skipString(text, i) - 1; continue; }
     if (c === '{') depth++;
@@ -444,9 +459,9 @@ type TsJob = { decl: TsDecl; stack: string[]; listName: string; depth: number; p
 
 const dedupe = (xs: string[]) => [...new Set(xs)];
 
-/** A member key in a declaration body (`name:`, `name?:`, a method `name(`) after `{`, `;`, `,`
+/** A member key in a declaration body (`name:`, `name?:`, a method or accessor `name(`) after `{`, `}`, `;`, `,`
  *  or a line start: group 1 is the lead, group 2 the key to blank. */
-const MEMBER_KEY = /([{;,]\s*|^[ \t]*)((?:readonly\s+)?(?:\w+|"[^"\n]*"|'[^'\n]*'))(?=\s*\??\s*[:(])/gm;
+const MEMBER_KEY = /([{};,]\s*|^[ \t]*)((?:(?:readonly|get|set|static)\s+)?(?:\w+|"[^"\n]*"|'[^'\n]*'))(?=\s*\??\s*[:(])/gm;
 
 /**
  * Collect every top-level `interface`, `type` alias and `enum` (first of a name wins).
@@ -455,15 +470,19 @@ const MEMBER_KEY = /([{;,]\s*|^[ \t]*)((?:readonly\s+)?(?:\w+|"[^"\n]*"|'[^'\n]*
 function collectTsDecls(clean: string, masked: string): Map<string, TsDecl> {
   const decls = new Map<string, TsDecl>();
   const re = /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:const\s+)?(interface|type|enum)\s+(\w+)/gm;
-  let m: RegExpExecArray | null;
   const skipWs = (i: number) => { while (i < masked.length && /\s/.test(masked[i])) i++; return i; };
-  while ((m = re.exec(masked))) {
+  // A declaration never runs into the next line-starting header, so every scan for its
+  // closer stops there: an unclosed header can't make each later one rescan to the end.
+  const heads = [...masked.matchAll(re)];
+  for (let h = 0; h < heads.length; h++) {
+    const m = heads[h];
+    const limit = h + 1 < heads.length ? heads[h + 1].index! : masked.length;
     const kind = m[1] as TsDecl['kind'];
     const name = m[2];
-    const index = m.index;
-    let i = skipWs(m.index + m[0].length);
+    const index = m.index!;
+    let i = skipWs(index + m[0].length);
     if (kind !== 'enum' && masked[i] === '<') {
-      const k = matchBracket(masked, i, masked.length);
+      const k = matchBracket(masked, i, limit);
       if (k < 0) continue;
       i = skipWs(k + 1);
     }
@@ -475,37 +494,37 @@ function collectTsDecls(clean: string, masked: string): Map<string, TsDecl> {
         const from = i + 7;
         let j = from;
         let depth = 0;
-        for (; j < masked.length; j++) {
+        for (; j < limit; j++) {
           const c = masked[j];
           if (c === '<') depth++;
           else if (c === '>') depth--;
           else if (c === '{' && depth <= 0) break;
           else if (c === ';' || c === '=' || c === '}' || isQuote(c)) { j = -1; break; }
         }
-        if (j < 0 || j >= masked.length) continue;
+        if (j < 0 || j >= limit) continue;
         bases = splitTopLevel(masked, from, j, ',')
           .map(([a, b]) => /^\s*([\w.]+)/.exec(masked.slice(a, b))?.[1] ?? '')
           .filter(Boolean);
         i = j;
       }
       if (masked[i] !== '{') continue;
-      const close = matchBrace(clean, i + 1);
+      const close = matchBrace(clean, i + 1, limit);
       if (close < 0) continue;
       decl = { kind, name, index, start: index, end: close + 1, body: [i + 1, close], bases };
     } else if (kind === 'type' && masked[i] === '=') {
       const rs = i + 1;
-      const re2 = scanTypeEnd(clean, rs, clean.length);
+      const re2 = scanTypeEnd(clean, rs, limit);
       if (!clean.slice(rs, re2).trim()) continue;
       decl = { kind, name, index, start: index, end: re2, rhs: [rs, re2] };
       // A `type X = { ... }` alias is also an object body (a root candidate)
       let k = rs;
       while (k < re2 && /\s/.test(clean[k])) k++;
       if (clean[k] === '{') {
-        const close = matchBrace(clean, k + 1);
+        const close = matchBrace(clean, k + 1, re2);
         if (close >= 0) decl.body = [k + 1, close];
       }
     } else if (kind === 'enum' && masked[i] === '{') {
-      const close = matchBrace(clean, i + 1);
+      const close = matchBrace(clean, i + 1, limit);
       if (close < 0) continue;
       const values: Array<string | number> = [];
       let next = 0;

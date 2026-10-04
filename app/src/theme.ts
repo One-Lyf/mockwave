@@ -6,6 +6,8 @@ export type ResolvedTheme = 'light' | 'dark';
 
 const STORAGE_KEY = 'mockwave-theme';
 const DEFAULT_MODE: ThemeMode = 'system';
+/** The mode in effect this session (kept here too, so it holds when storage is blocked). */
+let currentMode: ThemeMode = DEFAULT_MODE;
 
 function systemPrefersDark(): boolean {
   return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches;
@@ -33,6 +35,7 @@ function applyResolvedTheme(mode: ThemeMode) {
 }
 
 export function setThemeMode(mode: ThemeMode) {
+  currentMode = mode;
   try {
     window.localStorage.setItem(STORAGE_KEY, mode);
   } catch {
@@ -44,12 +47,13 @@ export function setThemeMode(mode: ThemeMode) {
 /** Apply the stored mode before first paint, and follow OS changes while in System mode. */
 export function initTheme(): ThemeMode {
   const mode = getStoredThemeMode();
+  currentMode = mode;
   applyResolvedTheme(mode);
-  // Registered unconditionally and re-reading the stored mode on each change, so a
-  // later switch to System follows the OS and an explicit Light/Dark is never clobbered.
+  // Registered unconditionally and reading the current mode on each change, so a later
+  // switch to System follows the OS and an explicit Light/Dark is never clobbered.
   if (typeof window !== 'undefined' && window.matchMedia) {
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => {
-      applyResolvedTheme(getStoredThemeMode());
+      applyResolvedTheme(currentMode);
     });
   }
   return mode;

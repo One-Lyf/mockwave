@@ -148,6 +148,18 @@ function matchClose(text: string, i: number, end: number, open: string, close: s
   return -1;
 }
 
+/** For each `{`, the index of its matching `}` (or -1), in one stack pass. Same answer as
+ *  matchClose(text, open, text.length, '{', '}'). */
+function braceMatches(text: string): Int32Array {
+  const out = new Int32Array(text.length).fill(-1);
+  const stack: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '{') stack.push(i);
+    else if (text[i] === '}' && stack.length) out[stack.pop()!] = i;
+  }
+  return out;
+}
+
 /** Skip directives (`@name` or `@name(args)`) starting at `i`. */
 function skipDirectives(text: string, i: number, end: number): number {
   for (;;) {
@@ -244,6 +256,19 @@ function collectDefinitions(text: string): { defs: Map<string, Definition>; root
   const defs = new Map<string, Definition>();
   const order: Array<{ name: string; keyword: string }> = [];
   const re = /^[ \t]*(extend[ \t]+)?(type|interface|input|enum|union|scalar)[ \t]+([A-Za-z_]\w*)/gm;
+  // Lookup tables built once, so no header rescans the rest of the text (linear overall):
+  // the next `{` / `}`, each `{`'s matching `}`, and the line starts of definition keywords.
+  const nextOpen = nextOf(text, '{');
+  const nextClose = nextOf(text, '}');
+  const closeOf = braceMatches(text);
+  const keywordLines = [...text.matchAll(/\n[ \t]*(?:extend|type|interface|input|enum|union|scalar|schema|directive)\b/g)].map((k) => k.index!);
+  /** Is there a definition keyword line starting in [from, to)? */
+  const keywordBetween = (from: number, to: number) => {
+    let lo = 0, hi = keywordLines.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (keywordLines[mid] < from) lo = mid + 1; else hi = mid; }
+    return lo < keywordLines.length && keywordLines[lo] < to;
+  };
+  const unionRe = /[^=\n{]*=\s*(?:\|\s*)?([A-Za-z_]\w*(?:\s*\|\s*[A-Za-z_]\w*)*)/y;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const [, extend, keyword, name] = m;
@@ -255,20 +280,22 @@ function collectDefinitions(text: string): { defs: Map<string, Definition>; root
       continue;
     }
     if (keyword === 'union') {
-      const eq = /^[^=\n{]*=\s*\|?\s*([A-Za-z_]\w*(?:\s*\|\s*[A-Za-z_]\w*)*)/.exec(text.slice(after));
+      unionRe.lastIndex = after;
+      const eq = unionRe.exec(text);
       if (eq) defs.set(name, { kind: 'union', members: eq[1].split('|').map((s) => s.trim()) });
       continue;
     }
 
     // Object types and enums: find the `{` (after `implements ...` / directives)
-    const open = text.indexOf('{', after);
-    if (open < 0 || /[}]/.test(text.slice(after, open)) || /\n[ \t]*(?:extend|type|interface|input|enum|union|scalar|schema|directive)\b/.test(text.slice(after, open))) continue;
-    const close = matchClose(text, open, text.length, '{', '}');
+    const open = nextOpen[after];
+    if (open >= text.length || nextClose[after] < open || keywordBetween(after, open)) continue;
+    const close = closeOf[open];
     if (close < 0) continue;
     re.lastIndex = close + 1;
 
     if (keyword === 'enum') {
-      const body = text.slice(open + 1, close).replace(/@[A-Za-z_]\w*(?:\s*\([^)]*\))?/g, ' ');
+      // `[^()]*`, not `[^)]*`: an unclosed `(` can't run to the body end (strings are masked)
+      const body = text.slice(open + 1, close).replace(/@[A-Za-z_]\w*(?:\s*\([^()]*\))?/g, ' ');
       const values = body.match(/[A-Za-z_]\w*/g) ?? [];
       const prev = defs.get(name);
       defs.set(name, { kind: 'enum', values: [...(prev?.kind === 'enum' ? prev.values : []), ...values] });

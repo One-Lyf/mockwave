@@ -58,6 +58,10 @@ export function createRng(seed?: string | number): Rng {
   return mulberry32(hasSeed(seed) ? hashSeed(seed) : (Math.random() * 4294967296) >>> 0);
 }
 
+/** Values generated per call at most: nested lists (`string[][][][]`) multiply, so after
+ *  this many values lists come out empty and other values null. Deterministic. */
+const VALUE_BUDGET = 20000;
+
 /** Dates are anchored here when a seed is given (so seeded output never drifts with the clock). */
 const SEEDED_EPOCH = Date.UTC(2026, 0, 1);
 
@@ -67,6 +71,8 @@ interface GenContext {
   options: MockOptions;
   /** Reference "now" in epoch ms for relative dates. */
   now: number;
+  /** Values left to generate (see VALUE_BUDGET). */
+  budget: number;
 }
 
 /**
@@ -94,6 +100,7 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
     rng: createRng(options.seed),
     options,
     now: Number.isFinite(ref) ? ref : hasSeed(options.seed) ? SEEDED_EPOCH : Date.now(),
+    budget: VALUE_BUDGET,
   };
   const data = generateFromDefinition(config.root, ctx, 0, { name: config.name });
 
@@ -110,10 +117,11 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
  * field-name heuristics (see fieldHints.ts).
  */
 function generateFromDefinition(definition: MockDefinition, ctx: GenContext, depth: number, slot: Slot = {}): unknown {
-  // Prevent infinite recursion
-  if (depth > 10) {
-    return null;
+  // Prevent infinite recursion, and runaway size
+  if (depth > 10 || ctx.budget <= 0) {
+    return definition.type === 'array' ? [] : null;
   }
+  ctx.budget--;
 
   switch (definition.type) {
     case 'object':
@@ -180,7 +188,7 @@ function generateMockArray(definition: MockArrayDefinition, ctx: GenContext, dep
   length = Math.max(0, Math.min(length, 20));
 
   const arr: unknown[] = [];
-  for (let i = 0; i < length; i++) {
+  for (let i = 0; i < length && ctx.budget > 0; i++) {
     arr.push(generateFromDefinition(definition.itemType, ctx, depth + 1, slot));
   }
 
