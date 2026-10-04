@@ -88,6 +88,8 @@ describe('createStore', () => {
     const goal = await store.create('goal', { kcal: 2000, active: true });
     await expect(store.update('goal', goal.id, { id: 'other' })).rejects.toThrow('cannot set id');
     await expect(store.update('goal', 'nope', { kcal: 1 })).rejects.toThrow('no row');
+    await expect(store.update('goal', goal.id, { kcal: undefined })).rejects.toThrow('"kcal" is required');
+    expect(store.get('goal', goal.id)?.kcal).toBe(2000);
   });
 
   it('accepts null for optional fields only', async () => {
@@ -139,5 +141,6 @@ describe('generated surfaces', () => {
     expect(listener).toHaveBeenCalledTimes(3);
     off();
     await expect(store.dispatch('goal.archive', {})).rejects.toThrow('unknown action');
+    await expect(store.dispatch('create', {})).rejects.toThrow('unknown action "create"');
   });
 });

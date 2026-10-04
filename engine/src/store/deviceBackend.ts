@@ -21,14 +21,19 @@ const done = (tx: IDBTransaction) =>
 function openDb(factory: IDBFactory, name: string, version: number | undefined, entities: string[]) {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const r = factory.open(name, version);
+    let blocked = false;
     r.onupgradeneeded = () => {
       for (const e of entities) {
         if (!r.result.objectStoreNames.contains(e)) r.result.createObjectStore(e, { keyPath: 'id' });
       }
     };
-    r.onsuccess = () => resolve(r.result);
+    // After a blocked rejection the open can still succeed later; close that orphan connection.
+    r.onsuccess = () => (blocked ? r.result.close() : resolve(r.result));
     r.onerror = () => reject(r.error);
-    r.onblocked = () => reject(new Error(`deviceBackend: "${name}" is open in another tab`));
+    r.onblocked = () => {
+      blocked = true;
+      reject(new Error(`deviceBackend: "${name}" is open in another tab`));
+    };
   });
 }
 

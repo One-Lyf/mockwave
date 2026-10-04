@@ -52,6 +52,10 @@ export interface KitStore {
 
 export class StoreError extends Error {}
 
+/** Drops keys whose value is undefined, so a spread never writes them over a row. */
+const defined = (values: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
+
 const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/([A-Z])/g, ' $1');
 
 export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
@@ -83,7 +87,8 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
     for (const f of e.fields) {
       const v = values[f.name];
       if (v === undefined) {
-        if (!partial && !f.optional) errors.push(`"${f.name}" is required`);
+        // A patch may leave a field out, but naming a required field as undefined would erase it.
+        if ((!partial || f.name in values) && !f.optional) errors.push(`"${f.name}" is required`);
         continue;
       }
       if (v === null && f.optional) continue;
@@ -130,7 +135,7 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
       const e = entityOf(entity);
       check(e, values, false);
       const at = now().toISOString();
-      return write(entity, { ...values, id: newId(), createdAt: at, updatedAt: at });
+      return write(entity, { ...defined(values), id: newId(), createdAt: at, updatedAt: at });
     },
 
     async update(entity, id, patch) {
@@ -140,7 +145,7 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
       const system = Object.keys(patch).filter((k) => (SYSTEM_FIELDS as readonly string[]).includes(k));
       if (system.length) throw new StoreError(`${entity}: cannot set ${system.join(', ')}`);
       check(e, patch, true);
-      return write(entity, { ...current, ...patch, updatedAt: now().toISOString() });
+      return write(entity, { ...current, ...defined(patch), updatedAt: now().toISOString() });
     },
 
     async delete(entity, id) {
@@ -176,6 +181,7 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
 
     async dispatch(action, payload) {
       const dot = action.lastIndexOf('.');
+      if (dot < 0) throw new StoreError(`unknown action "${action}"`);
       const entity = action.slice(0, dot);
       const verb = action.slice(dot + 1);
       const p = (payload ?? {}) as Record<string, unknown>;

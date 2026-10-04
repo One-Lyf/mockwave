@@ -55,6 +55,6 @@ describe('deviceBackend', () => {
   });
 
   it('fails clearly without IndexedDB', async () => {
-    await expect(deviceBackend('x', undefined as unknown as IDBFactory).open(['a'])).rejects.toThrow('not available');
+    await expect(deviceBackend('x', null as unknown as IDBFactory).open(['a'])).rejects.toThrow('not available');
   });
 });
