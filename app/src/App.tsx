@@ -14,9 +14,10 @@
  * parseSchema() detects the format, generateMock() fills it with mock values.
  */
 
-import { useState } from 'react';
+import { Component, useState, type ReactNode } from 'react';
 import { generateMock, parseSchema } from '../../engine/src';
 import type { SchemaImport, SchemaType } from '../../engine/src';
+import ThemeToggle from './ThemeToggle';
 
 import './index.css';
 
@@ -40,6 +41,30 @@ interface Result {
   unrecognized: string[];
 }
 
+/** Keeps a render failure in the result panel from blanking the whole app. Remounted
+ *  (via `key`) for each new result, so the next Generate gets a fresh chance. */
+class ResultBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <section className="export-panel">
+          <h2>Generated Mock</h2>
+          <div className="error" role="alert">
+            Mockwave generated mock data but could not display it. Try a smaller or simpler schema.
+          </div>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /** Render generated data as code in the shape of the pasted schema. */
 function toCode(imp: SchemaImport, data: unknown): string {
   const json = JSON.stringify(data, null, 2);
@@ -55,6 +80,7 @@ export default function App() {
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [runId, setRunId] = useState<number>(0);
 
   const handleGenerateMock = () => {
     setError(null);
@@ -65,12 +91,18 @@ export default function App() {
       return;
     }
 
-    const imp = parseSchema(schemaInput);
+    const unreadable =
+      'Mockwave could not read this schema. Paste a TypeScript interface or type, a JSON Schema, sample JSON, or a GraphQL type.';
+    // Parsing can throw on hostile input (deep nesting); it must surface as an error, never a blank app
+    let imp: SchemaImport | null;
+    try {
+      imp = parseSchema(schemaInput);
+    } catch {
+      imp = null;
+    }
     if (!imp) {
       setResult(null);
-      setError(
-        'Mockwave could not read this schema. Paste a TypeScript interface or type, a JSON Schema, sample JSON, or a GraphQL type.',
-      );
+      setError(unreadable);
       return;
     }
 
@@ -78,10 +110,11 @@ export default function App() {
       const { data } = generateMock(imp.config);
       setResult({
         code: toCode(imp, data),
-        format: FORMAT_LABELS[imp.schemaType],
-        name: imp.config.name,
-        unrecognized: imp.unrecognized,
+        format: FORMAT_LABELS[imp.schemaType] ?? 'Schema',
+        name: String(imp.config.name),
+        unrecognized: imp.unrecognized.map(String),
       });
+      setRunId((n) => n + 1);
     } catch {
       setResult(null);
       setError('Mockwave read this schema but could not generate mock data for it.');
@@ -109,8 +142,11 @@ export default function App() {
   return (
     <div className="mockwave-app">
       <header className="mockwave-header">
+        <div className="header-bar">
+          <ThemeToggle />
+        </div>
         <h1>Mockwave</h1>
-        <p className="tagline">Generate realistic mock data with copy-as-code</p>
+        <p className="tagline">Generate Realistic Mock Data With Copy-As-Code</p>
       </header>
 
       <main className="mockwave-main">
@@ -161,28 +197,30 @@ interface User {
         </section>
 
         {result && (
-          <section className="export-panel">
-            <h2>Generated Mock</h2>
-            <p className="detected">
-              Detected {result.format}: <code>{result.name}</code>
-            </p>
-            {result.unrecognized.length > 0 && (
-              <p className="note">{unrecognizedNote(result.unrecognized)}</p>
-            )}
-            <div className="tabs">
-              <button className="tab active">Code</button>
-              <button className="tab" disabled title="Coming Soon">Diff</button>
-            </div>
-            <pre className="code-output">{result.code}</pre>
-            <div className="copy-actions">
-              <button className="btn" onClick={handleCopy}>
-                {copied ? 'Copied' : 'Copy Mock Code'}
-              </button>
-              <button className="btn" disabled title="Coming Soon">
-                Copy Diff
-              </button>
-            </div>
-          </section>
+          <ResultBoundary key={runId}>
+            <section className="export-panel">
+              <h2>Generated Mock</h2>
+              <p className="detected">
+                Detected {result.format}: <code>{result.name}</code>
+              </p>
+              {result.unrecognized.length > 0 && (
+                <p className="note">{unrecognizedNote(result.unrecognized)}</p>
+              )}
+              <div className="tabs">
+                <button className="tab active">Code</button>
+                <button className="tab" disabled title="Coming Soon">Diff</button>
+              </div>
+              <pre className="code-output">{result.code}</pre>
+              <div className="copy-actions">
+                <button className="btn" onClick={handleCopy}>
+                  {copied ? 'Copied' : 'Copy Mock Code'}
+                </button>
+                <button className="btn" disabled title="Coming Soon">
+                  Copy Diff
+                </button>
+              </div>
+            </section>
+          </ResultBoundary>
         )}
       </main>
 

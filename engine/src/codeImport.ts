@@ -140,18 +140,20 @@ export function parseJSONSchema(code: string): SchemaImport | null {
   
   try {
     const schema = JSON.parse(blankFences(src));
-    if (!schema || typeof schema !== 'object' || !schema.properties) return null;
+    if (!isPlainObject(schema) || !isPlainObject(schema.properties)) return null;
     
     const { properties, spans, recognized, unrecognized } = parseJSONSchemaProperties(
       schema.properties,
-      Array.isArray(schema.required) ? schema.required : [],
+      Array.isArray(schema.required) ? (schema.required as unknown[]).filter((k): k is string => typeof k === 'string') : [],
       []
     );
     
     return {
       config: {
         type: 'json-schema',
-        name: schema.title || 'Schema',
+        // Only a non-empty string title names the schema (a number/object title would
+        // otherwise flow into the UI as a React child)
+        name: typeof schema.title === 'string' && schema.title.trim() ? schema.title.trim() : 'Schema',
         root: {
           type: 'object',
           properties,
@@ -232,6 +234,9 @@ export function parseSchema(code: string): SchemaImport | null {
 
 /** Keys never written into a config map (would hit Object.prototype's setter). */
 const UNSAFE_KEY = '__proto__';
+
+/** A JSON object (not null, not an array): `"properties": "abc"` must not read as keys 0, 1, 2. */
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /** Blank Markdown code-fence lines (```ts ... ```) to spaces, so a fenced paste parses
  *  like the bare code. Same length and offsets as the input. */
@@ -785,8 +790,12 @@ function parseRecord(text: string, keyRange: [number, number], valRange: [number
 
   if (literals.length > 0 && literals.every((k): k is string => k !== null)) {
     const properties: Record<string, MockPropertyDefinition> = {};
-    for (const key of literals) if (key !== UNSAFE_KEY) properties[key] = { mock: valueType };
-    return { ...base, def: { type: 'object', properties } };
+    const unrecognized = [...base.unrecognized];
+    for (const key of literals) {
+      if (key === UNSAFE_KEY) unrecognized.push(listName ? `${listName}.${key}` : key);
+      else properties[key] = { mock: valueType };
+    }
+    return { ...base, unrecognized, def: { type: 'object', properties } };
   }
   const keyType = keys.length > 0 && keys.every((k) => k === 'number') ? 'number' : 'string';
   return { ...base, def: { type: 'record', valueType, keyType } };
@@ -834,10 +843,8 @@ function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | nu
   
   switch (type) {
     case 'object': {
-      const props = node.properties && typeof node.properties === 'object'
-        ? (node.properties as Record<string, unknown>)
-        : {};
-      const required = Array.isArray(node.required) ? (node.required as string[]) : [];
+      const props = isPlainObject(node.properties) ? node.properties : {};
+      const required = Array.isArray(node.required) ? (node.required as unknown[]).filter((k): k is string => typeof k === 'string') : [];
       const properties: Record<string, MockPropertyDefinition> = {};
       for (const [key, child] of Object.entries(props)) {
         if (key === UNSAFE_KEY) continue;
