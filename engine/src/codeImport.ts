@@ -15,6 +15,8 @@
  */
 
 import type { MockConfig, MockDefinition, MockPrimitiveDefinition, MockPropertyDefinition } from './types';
+import { parseGraphQLSchema } from './graphqlImport';
+import { blankLiterals } from './scan';
 
 /** A mockable value located in the pasted schema, with its exact text span so
  *  patchCode() can rewrite it in place. */
@@ -60,49 +62,92 @@ export interface SchemaImport {
  * 
  * Recognizes:
  * - Primitive types: string, number, boolean, Date, etc.
- * - Array types: Type[]
+ * - Array types: Type[], Array<T>, ReadonlyArray<T>
  * - Optional fields: field?: Type
- * - Nested objects: { nested: Type }
- * - Union types: Type1 | Type2 (uses first non-null type)
- * - Literal types: "value"
- * 
- * Does NOT recognize (left for AI fallback):
- * - Generic types: Array<T>, Record<K, V>
- * - Custom/imported types not in built-in registry
- * - Complex union types
- * - Template literal types
- * - Mapped types
+ * - Nested objects: { nested: Type } (at any depth, also inside generics)
+ * - Maps: Record<string, V> (a few generated keys) and Record<'a' | 'b', V> (exactly those keys)
+ * - Union types: Type1 | Type2 (uses the first non-null member; a union of literals
+ *   like 'a' | 'b' becomes an enum)
+ * - Literal types: "value", 42, true
+ * - Multi-line headers: `interface Foo\n  extends Bar {`, `interface Foo // note\n{`
+ * - Same-file references: `owner: Account`, `Account[]`, `Array<Account>`,
+ *   `Record<string, Account>` resolve to an interface / type alias / enum defined in
+ *   the same input (interface `extends` bases merged in, `A & B` of objects merged).
+ *   Cycles are capped like GraphQL: 4 levels below the root, a type at most twice
+ *   on one path (one level of self-reference), then an empty list / null. Referenced
+ *   object types expand breadth-first, so the field budget goes to shallow levels first.
+ *
+ * Does NOT recognize (reported in `unrecognized`, never leaked into other fields):
+ * - Other generics: Partial<T>, Promise<T>, ...
+ * - Imported types, or names not defined in the input
+ * - Tuples, function types, mapped and template literal types
  */
 export function parseTypeScriptSchema(code: string): SchemaImport | null {
-  const src = code ?? '';
+  stringMemo = new Map();
+  try {
+    return parseTypeScript(code ?? '');
+  } finally {
+    stringMemo = null;
+  }
+}
+
+function parseTypeScript(src: string): SchemaImport | null {
   // Comments blanked to same-length whitespace, so offsets (spans) still index `src`.
-  const clean = blankComments(src);
+  const clean = blankComments(blankFences(src));
+  // String/template contents blanked too, for the header search only: a `type Foo {`
+  // inside a string or template literal can never be mistaken for the declaration.
+  const masked = blankStrings(clean);
 
-  // `interface Name {` or `type Name = {` (generics/extends allowed), declared at the
-  // start of a line and on one line, so a "type foo" in prose or a JSON string can't match.
-  const head = /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(interface|type)\s+(\w+)[^{=;\n]*(?:=\s*)?\{/m.exec(clean);
-  if (!head) return null;
+  // Every `interface` / `type` / `enum` declaration starting a line. Headers may wrap
+  // lines (prettier-wrapped `extends`, a comment before `{`), but only generics / an
+  // extends clause may sit between the name and the body, so a "type <word>" in
+  // prose can't hijack the match.
+  const decls = collectTsDecls(clean, masked);
+  const candidates = [...decls.values()].filter((d) => d.kind !== 'enum' && d.body).sort((x, y) => x.index - y.index);
+  if (candidates.length === 0) return null;
 
-  const [, keyword, typeName] = head;
-  const open = head.index + head[0].length;
-  const close = matchBrace(clean, open);
-  if (close < 0) return null;
-  const body = clean.slice(open, close);
-  const schemaType: SchemaType = keyword === 'interface' ? 'typescript-interface' : 'typescript-type';
+  // Root = the first object type no other declaration refers to (so `Account` defined
+  // above `User { owner: Account }` doesn't become the root); else the first one. Only
+  // type positions count: a member named like a type (`User: string`, `User(): void`)
+  // is not a reference.
+  // One pass: every identifier in each declaration's type positions (enum bodies hold
+  // only member names, so enums refer to nothing).
+  const referenced = new Set<string>();
+  for (const d of decls.values()) {
+    if (d.kind === 'enum') continue;
+    const typeText = masked.slice(d.start, d.end).replace(MEMBER_KEY, (_m, lead: string, key: string) => lead + ' '.repeat(key.length));
+    for (const id of new Set(typeText.match(/\w+/g) ?? [])) if (id !== d.name) referenced.add(id);
+  }
+  const root = candidates.find((c) => !referenced.has(c.name)) ?? candidates[0];
+  const typeName = root.name;
+  const [open, close] = root.body!;
+  const schemaType: SchemaType = root.kind === 'interface' ? 'typescript-interface' : 'typescript-type';
 
-  const { properties, spans, recognized, unrecognized } = parseTypeScriptBody(body, typeName, open, '');
-  
+  const ctx: TsCtx = { decls, root: typeName, stack: [typeName], budget: TS_FIELD_BUDGET, reported: [], reportedSet: new Set(), queue: [], noDefer: 0, lateRecognized: [] };
+  const inherited = root.kind === 'interface' ? inheritedMembers(clean, root, ctx, typeName, '', new Set([typeName])) : null;
+  // An alias root is its whole right side when that is an object (`{ ... } & Base`),
+  // else just its first body
+  let own: BodyResult | null = null;
+  if (root.kind === 'type' && root.rhs) {
+    const t = parseTypeExpr(clean, root.rhs[0], root.rhs[1], typeName, '', 0, ctx);
+    if (t.def?.type === 'object') own = { properties: t.def.properties, spans: t.spans, recognized: t.recognized, unrecognized: t.unrecognized };
+  }
+  own ??= parseTypeScriptBody(clean, open, close, typeName, '', 0, ctx);
+  const properties = { ...(inherited?.properties ?? {}), ...own.properties };
+  // Referenced types expand breadth-first, after every field above them is counted
+  for (let q = 0; q < ctx.queue.length; q++) runJob(clean, ctx.queue[q], ctx);
+
   return {
     config: {
       type: schemaType,
       name: typeName,
       root: { type: 'object', properties },
     },
-    spans,
+    spans: own.spans,
     source: src,
     schemaType,
-    recognized,
-    unrecognized,
+    recognized: dedupe([...(inherited?.recognized ?? []), ...own.recognized, ...ctx.lateRecognized]),
+    unrecognized: dedupe([...(inherited?.unrecognized ?? []), ...own.unrecognized, ...ctx.reported]),
   };
 }
 
@@ -115,19 +160,21 @@ export function parseJSONSchema(code: string): SchemaImport | null {
   const src = code ?? '';
   
   try {
-    const schema = JSON.parse(src);
-    if (!schema || typeof schema !== 'object' || !schema.properties) return null;
+    const schema = JSON.parse(blankFences(src));
+    if (!isPlainObject(schema) || !isPlainObject(schema.properties)) return null;
     
     const { properties, spans, recognized, unrecognized } = parseJSONSchemaProperties(
       schema.properties,
-      Array.isArray(schema.required) ? schema.required : [],
+      Array.isArray(schema.required) ? (schema.required as unknown[]).filter((k): k is string => typeof k === 'string') : [],
       []
     );
     
     return {
       config: {
         type: 'json-schema',
-        name: schema.title || 'Schema',
+        // Only a non-empty string title names the schema (a number/object title would
+        // otherwise flow into the UI as a React child)
+        name: typeof schema.title === 'string' && schema.title.trim() ? schema.title.trim() : 'Schema',
         root: {
           type: 'object',
           properties,
@@ -152,7 +199,7 @@ export function parseJSONData(code: string): SchemaImport | null {
   const src = code ?? '';
   
   try {
-    const data = JSON.parse(src);
+    const data = JSON.parse(blankFences(src));
     if (!data || typeof data !== 'object') return null;
     
     const root = buildMockConfigFromValue(data);
@@ -178,10 +225,15 @@ export function parseJSONData(code: string): SchemaImport | null {
 /**
  * Main entry point: try deterministic parsers in order, fall back to AI.
  * 
- * Order: TypeScript -> JSON Schema -> JSON -> (future: others)
+ * Order: GraphQL SDL (only when it clearly looks like SDL, see looksLikeGraphQL)
+ * -> TypeScript -> JSON Schema -> JSON -> (future: others)
  */
 export function parseSchema(code: string): SchemaImport | null {
-  // Try TypeScript first (most common for WaveRider users)
+  // GraphQL first: `type X { name: String! }` would otherwise be read as a TS type
+  const gqlResult = parseGraphQLSchema(code);
+  if (gqlResult) return gqlResult;
+
+  // Then TypeScript (most common for WaveRider users)
   const tsResult = parseTypeScriptSchema(code);
   if (tsResult) return tsResult;
   
@@ -193,7 +245,7 @@ export function parseSchema(code: string): SchemaImport | null {
   const jsonResult = parseJSONData(code);
   if (jsonResult) return jsonResult;
   
-  // TODO: Add more parsers (Zod, Yup, GraphQL, etc.)
+  // TODO: Add more parsers (Zod, Yup, etc.)
   
   // No deterministic parser matched — this would trigger AI fallback
   return null;
@@ -204,169 +256,631 @@ export function parseSchema(code: string): SchemaImport | null {
 /** Keys never written into a config map (would hit Object.prototype's setter). */
 const UNSAFE_KEY = '__proto__';
 
-/** Replace // and block comments with spaces (newlines kept), skipping string literals,
- *  so the result has the same length and offsets as the input. */
-function blankComments(src: string): string {
-  return src.replace(
-    /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,
-    (m: string, str?: string) => (str ? m : m.replace(/[^\n]/g, ' ')),
-  );
+/** A JSON object (not null, not an array): `"properties": "abc"` must not read as keys 0, 1, 2. */
+const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Blank Markdown code-fence lines (```ts ... ```) to spaces, so a fenced paste parses
+ *  like the bare code. Same length and offsets as the input. */
+export function blankFences(src: string): string {
+  return src.replace(/^[ \t]*(?:```|~~~)[^\n`]*$/gm, (m) => ' '.repeat(m.length));
 }
 
-/** Given `open` just past a `{`, return the index of its matching `}` (or -1). */
-function matchBrace(text: string, open: number): number {
+/** Replace // and block comments with spaces (newlines kept), skipping string literals,
+ *  so the result has the same length and offsets as the input. One linear pass (see scan.ts). */
+function blankComments(src: string): string {
+  return blankLiterals(src, { single: true, template: true, slash: true }, COMMENTS_ONLY);
+}
+const COMMENTS_ONLY = new Set(['comment'] as const);
+
+/** Blank the contents of string and template literals (quotes and newlines kept). One
+ *  linear pass (see scan.ts). */
+function blankStrings(src: string): string {
+  return blankLiterals(src, { single: true, template: true }, STRINGS_ONLY, true);
+}
+const STRINGS_ONLY = new Set(['string'] as const);
+
+/** Per text and quote char: the last scan that found no closer, as [from, to). An opener
+ *  strictly inside it has no closer either (see scan.ts for why), so runs of unterminated
+ *  quotes don't rescan to the line or text end. Only that interval is trusted: scanners
+ *  revisit earlier text, and an opener before `from` may well be closed. Set for the
+ *  duration of one parseTypeScriptSchema call. */
+let stringMemo: Map<string, Record<string, [number, number]>> | null = null;
+
+/** `text[i]` is a quote ('"`); return the index just past its closing quote. An
+ *  unterminated quote (or a '/" string reaching a newline) is treated as a plain char. */
+function skipString(text: string, i: number): number {
+  const q = text[i];
+  let memo = stringMemo?.get(text);
+  if (stringMemo && !memo) { memo = {}; stringMemo.set(text, memo); }
+  const known = memo?.[q];
+  if (known && known[0] < i && i < known[1]) return i + 1;
+  let j = i + 1;
+  for (; j < text.length; j++) {
+    const c = text[j];
+    if (c === '\\') { j++; continue; }
+    if (c === q) return j + 1;
+    if (c === '\n' && q !== '`') break;
+  }
+  if (memo) memo[q] = [i, j];
+  return i + 1;
+}
+
+const isQuote = (c: string) => c === '"' || c === "'" || c === '`';
+const OPENERS = '{([<';
+const CLOSERS = '})]>';
+
+/** Given `open` just past a `{`, return the index of its matching `}` before `end` (or -1).
+ *  String and template literals are skipped, so `s: "{"` can't unbalance it. */
+function matchBrace(text: string, open: number, end = text.length): number {
   let depth = 1;
-  for (let i = open; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}' && --depth === 0) return i;
+  for (let i = open; i < end; i++) {
+    const c = text[i];
+    if (isQuote(c)) { i = skipString(text, i) - 1; continue; }
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return i;
   }
   return -1;
 }
 
-/**
- * Parse the fields of a brace body. `bodyOffset` is where `body` starts in the original
- * source (so spans are absolute); `relPath` is the dotted path from the root type, used
- * for the recognized/unrecognized lists (top-level fields are bare names).
- */
-function parseTypeScriptBody(body: string, parentPath: string, bodyOffset: number, relPath: string): {
+/** `text[i]` is one of `{([<`; return the index of its balanced closer before `end`,
+ *  tracking all four bracket kinds plus strings (and `=>` arrows), or -1. */
+function matchBracket(text: string, i: number, end: number): number {
+  const stack: string[] = [];
+  for (let j = i; j < end; j++) {
+    const c = text[j];
+    if (isQuote(c)) { j = skipString(text, j) - 1; continue; }
+    if (c === '=' && text[j + 1] === '>') { j++; continue; }
+    const o = OPENERS.indexOf(c);
+    if (o >= 0) { stack.push(CLOSERS[o]); continue; }
+    if (CLOSERS.includes(c)) {
+      if (stack.pop() !== c) return -1;
+      if (stack.length === 0) return j;
+    }
+  }
+  return -1;
+}
+
+/** End (exclusive) of the type expression starting at `i`: the first `;` or `,` at
+ *  bracket depth 0, a closer with no opener, or a depth-0 newline that doesn't
+ *  continue the type (a wrapped `|`/`&` union/intersection keeps going). */
+function scanTypeEnd(text: string, i: number, end: number): number {
+  let depth = 0;
+  for (let j = i; j < end; j++) {
+    const c = text[j];
+    if (isQuote(c)) { j = skipString(text, j) - 1; continue; }
+    if (c === '=' && text[j + 1] === '>') { j++; continue; }
+    if (OPENERS.includes(c)) { depth++; continue; }
+    if (CLOSERS.includes(c)) { if (depth === 0) return j; depth--; continue; }
+    if (depth > 0) continue;
+    if (c === ';' || c === ',') return j;
+    if (c === '\n') {
+      const sofar = text.slice(i, j).trim();
+      if (!sofar || /[|&]$/.test(sofar)) continue;
+      let k = j + 1;
+      while (k < end && /\s/.test(text[k])) k++;
+      if (k < end && (text[k] === '|' || text[k] === '&')) continue;
+      return j;
+    }
+  }
+  return end;
+}
+
+/** Split [s, e) on a separator char at bracket depth 0; returns [start, end) ranges. */
+function splitTopLevel(text: string, s: number, e: number, sep: string): Array<[number, number]> {
+  const parts: Array<[number, number]> = [];
+  let depth = 0, from = s;
+  for (let j = s; j < e; j++) {
+    const c = text[j];
+    if (isQuote(c)) { j = skipString(text, j) - 1; continue; }
+    if (c === '=' && text[j + 1] === '>') { j++; continue; }
+    if (OPENERS.includes(c)) depth++;
+    else if (CLOSERS.includes(c)) depth = Math.max(0, depth - 1);
+    else if (c === sep && depth === 0) { parts.push([from, j]); from = j + 1; }
+  }
+  parts.push([from, e]);
+  return parts;
+}
+
+/** Index of the depth-0 opener whose balanced closer is `e - 1` (the last group), or -1. */
+function lastGroupStart(text: string, s: number, e: number): number {
+  for (let j = s; j < e; j++) {
+    const c = text[j];
+    if (isQuote(c)) { j = skipString(text, j) - 1; continue; }
+    if (c === '=' && text[j + 1] === '>') { j++; continue; }
+    if (OPENERS.includes(c)) {
+      const k = matchBracket(text, j, e);
+      if (k < 0) return -1;
+      if (k === e - 1) return j;
+      j = k;
+    }
+  }
+  return -1;
+}
+
+type BodyResult = {
   properties: Record<string, MockPropertyDefinition>;
   spans: ValueSpan[];
   recognized: string[];
   unrecognized: string[];
-} {
+};
+
+/** A parsed type expression: its mock (null = unrecognized), the span of the
+ *  patchable value token (for primitives/literals), and any nested-field results. */
+type TypeResult = {
+  def: MockDefinition | null;
+  span?: { start: number; end: number; quote: string };
+  spans: ValueSpan[];
+  recognized: string[];
+  unrecognized: string[];
+  /** A same-file reference cut off by the cycle/depth cap. */
+  capped?: boolean;
+};
+
+const MAX_TYPE_DEPTH = 64;
+const noType = (): TypeResult => ({ def: null, spans: [], recognized: [], unrecognized: [] });
+
+/** Same-file reference caps, matching the GraphQL importer: max object nesting below
+ *  the root, max times one type may appear on a path, total fields expanded. */
+const TS_MAX_DEPTH = 4;
+const TS_MAX_REPEAT = 2;
+const TS_FIELD_BUDGET = 2000;
+
+/** A top-level declaration: `start`/`end` cover it (for reference checks); `body` is
+ *  the [open, close) brace range of an object body; `rhs` a type alias's right side. */
+type TsDecl = {
+  kind: 'interface' | 'type' | 'enum';
+  name: string;
+  index: number;
+  start: number;
+  end: number;
+  body?: [number, number];
+  rhs?: [number, number];
+  bases?: string[];
+  values?: Array<string | number>;
+};
+
+/** Reference resolution state for one import. `stack` = the declared types being
+ *  expanded (root first); `reported` = unrecognized fields of referenced types, as
+ *  `Type.field` (once each). */
+type TsCtx = {
+  decls: Map<string, TsDecl>;
+  root: string;
+  stack: string[];
+  budget: number;
+  reported: string[];
+  reportedSet: Set<string>;
+  /** Referenced object types waiting to expand (breadth-first, so the budget goes to shallow levels first). */
+  queue: TsJob[];
+  /** > 0 while parsing intersection parts: those merge properties at once, so they can't wait. */
+  noDefer: number;
+  /** Recognized fields of queued types, in expansion order. */
+  lateRecognized: string[];
+};
+
+/** A queued reference: expanding `decl` fills `properties` (already placed in the result). */
+type TsJob = { decl: TsDecl; stack: string[]; listName: string; depth: number; properties: Record<string, MockPropertyDefinition> };
+
+const dedupe = (xs: string[]) => [...new Set(xs)];
+
+/** A member key in a declaration body (`name:`, `name?:`, a method or accessor `name(`) after `{`, `}`, `;`, `,`
+ *  or a line start: group 1 is the lead, group 2 the key to blank. */
+const MEMBER_KEY = /([{};,]\s*|^[ \t]*)((?:(?:readonly|get|set|static)\s+)?(?:\w+|"[^"\n]*"|'[^'\n]*'))(?=\s*\??\s*[:(])/gm;
+
+/**
+ * Collect every top-level `interface`, `type` alias and `enum` (first of a name wins).
+ * `masked` (strings blanked) is used to find headers; `clean` to match bodies.
+ */
+function collectTsDecls(clean: string, masked: string): Map<string, TsDecl> {
+  const decls = new Map<string, TsDecl>();
+  const re = /^[ \t]*(?:export\s+)?(?:declare\s+)?(?:default\s+)?(?:const\s+)?(interface|type|enum)\s+(\w+)/gm;
+  const skipWs = (i: number) => { while (i < masked.length && /\s/.test(masked[i])) i++; return i; };
+  // A declaration never runs into the next line-starting header, so every scan for its
+  // closer stops there: an unclosed header can't make each later one rescan to the end.
+  const heads = [...masked.matchAll(re)];
+  for (let h = 0; h < heads.length; h++) {
+    const m = heads[h];
+    const limit = h + 1 < heads.length ? heads[h + 1].index! : masked.length;
+    const kind = m[1] as TsDecl['kind'];
+    const name = m[2];
+    const index = m.index!;
+    let i = skipWs(index + m[0].length);
+    if (kind !== 'enum' && masked[i] === '<') {
+      const k = matchBracket(masked, i, limit);
+      if (k < 0) continue;
+      i = skipWs(k + 1);
+    }
+    let decl: TsDecl | null = null;
+    if (kind === 'interface' || (kind === 'type' && masked[i] === '{')) {
+      // `interface Foo extends A<T>, B {` (no quotes, `;` or `=` in the clause)
+      let bases: string[] = [];
+      if (kind === 'interface' && /^extends\s/.test(masked.slice(i, i + 8))) {
+        const from = i + 7;
+        let j = from;
+        let depth = 0;
+        for (; j < limit; j++) {
+          const c = masked[j];
+          if (c === '<') depth++;
+          else if (c === '>') depth--;
+          else if (c === '{' && depth <= 0) break;
+          else if (c === ';' || c === '=' || c === '}' || isQuote(c)) { j = -1; break; }
+        }
+        if (j < 0 || j >= limit) continue;
+        bases = splitTopLevel(masked, from, j, ',')
+          .map(([a, b]) => /^\s*([\w.]+)/.exec(masked.slice(a, b))?.[1] ?? '')
+          .filter(Boolean);
+        i = j;
+      }
+      if (masked[i] !== '{') continue;
+      const close = matchBrace(clean, i + 1, limit);
+      if (close < 0) continue;
+      decl = { kind, name, index, start: index, end: close + 1, body: [i + 1, close], bases };
+    } else if (kind === 'type' && masked[i] === '=') {
+      const rs = i + 1;
+      const re2 = scanTypeEnd(clean, rs, limit);
+      if (!clean.slice(rs, re2).trim()) continue;
+      decl = { kind, name, index, start: index, end: re2, rhs: [rs, re2] };
+      // A `type X = { ... }` alias is also an object body (a root candidate)
+      let k = rs;
+      while (k < re2 && /\s/.test(clean[k])) k++;
+      if (clean[k] === '{') {
+        const close = matchBrace(clean, k + 1, re2);
+        if (close >= 0) decl.body = [k + 1, close];
+      }
+    } else if (kind === 'enum' && masked[i] === '{') {
+      const close = matchBrace(clean, i + 1, limit);
+      if (close < 0) continue;
+      const values: Array<string | number> = [];
+      let next = 0;
+      for (const [a, b] of splitTopLevel(clean, i + 1, close, ',')) {
+        const mm = /^\s*(\w+|"[^"\n]*"|'[^'\n]*')\s*(?:=\s*([\s\S]*?))?\s*$/.exec(clean.slice(a, b));
+        if (!mm) continue;
+        const init = mm[2];
+        const str = init ? /^(['"`])(.*)\1$/.exec(init) : null;
+        if (str) values.push(str[2]);
+        else if (init && /^-?\d+(?:\.\d+)?$/.test(init)) { next = Number(init); values.push(next); next++; }
+        else if (!init) values.push(next++);
+        else values.push(mm[1].replace(/^['"]|['"]$/g, ''));
+      }
+      decl = { kind, name, index, start: index, end: close + 1, values };
+    }
+    if (decl && !decls.has(name)) decls.set(name, decl);
+  }
+  return decls;
+}
+
+/** Properties inherited from an interface's `extends` bases defined in the input
+ *  (bases first, so the interface's own members override them). No spans. */
+function inheritedMembers(text: string, decl: TsDecl, ctx: TsCtx, parentPath: string, relPath: string, seen: Set<string>): BodyResult {
+  const out: BodyResult = { properties: {}, spans: [], recognized: [], unrecognized: [] };
+  for (const baseName of decl.bases ?? []) {
+    const base = ctx.decls.get(baseName);
+    if (!base || seen.has(baseName)) continue;
+    seen.add(baseName);
+    let r: BodyResult | null = null;
+    if (base.kind === 'interface' && base.body) {
+      const up = inheritedMembers(text, base, ctx, parentPath, relPath, seen);
+      const own = parseTypeScriptBody(text, base.body[0], base.body[1], parentPath, relPath, 1, ctx);
+      r = { properties: { ...up.properties, ...own.properties }, spans: [], recognized: [...up.recognized, ...own.recognized], unrecognized: [...up.unrecognized, ...own.unrecognized] };
+    } else if (base.kind === 'type' && base.body) {
+      r = parseTypeScriptBody(text, base.body[0], base.body[1], parentPath, relPath, 1, ctx);
+    }
+    if (!r) continue;
+    Object.assign(out.properties, r.properties);
+    out.recognized.push(...r.recognized);
+    out.unrecognized.push(...r.unrecognized);
+  }
+  return out;
+}
+
+/**
+ * Resolve a reference to a type declared in the input. Enums become an enum pick;
+ * aliases and interfaces expand in place (spans are not kept: the patch targets are
+ * the declaration's own fields, not each use). Capped (cycle/depth/budget) refs come
+ * back with `capped: true` so lists become empty and single fields null.
+ */
+function resolveDecl(text: string, decl: TsDecl, ctx: TsCtx, listName: string, depth: number): TypeResult {
+  if (decl.kind === 'enum') {
+    const values = decl.values ?? [];
+    if (values.length === 0) return noType();
+    return { def: { type: values.every((v) => typeof v === 'number') ? 'number' : 'string', enum: [...values] }, spans: [], recognized: [], unrecognized: [] };
+  }
+  // Depth and budget count object types only (a `type ID = string` alias is free);
+  // the repeat cap applies to every alias, so `type A = B; type B = A` terminates.
+  const objectLike = decl.kind === 'interface' || !!decl.body;
+  const objectDepth = ctx.stack.filter((n) => { const d = ctx.decls.get(n); return !!d && (d.kind === 'interface' || !!d.body); }).length;
+  if (
+    ctx.stack.filter((n) => n === decl.name).length >= TS_MAX_REPEAT
+    || (objectLike && (objectDepth > TS_MAX_DEPTH || ctx.budget <= 0))
+  ) {
+    return { ...noType(), capped: true };
+  }
+  // A plain object type (an interface, or `type X = { ... }`) waits its turn in the queue
+  const plainObject = decl.kind === 'interface'
+    ? !!decl.body
+    : !!decl.body && !!decl.rhs && !text.slice(decl.body[1] + 1, decl.rhs[1]).trim();
+  if (plainObject && ctx.noDefer === 0) {
+    const properties: Record<string, MockPropertyDefinition> = {};
+    ctx.queue.push({ decl, stack: [...ctx.stack, decl.name], listName, depth, properties });
+    return { def: { type: 'object', name: decl.name, properties }, spans: [], recognized: [], unrecognized: [] };
+  }
+  ctx.stack.push(decl.name);
+  try {
+    return expandDecl(text, decl, ctx, listName, depth);
+  } finally {
+    ctx.stack.pop();
+  }
+}
+
+/** Expand a queued reference in its own path context. */
+function runJob(text: string, job: TsJob, ctx: TsCtx): void {
+  const saved = ctx.stack;
+  ctx.stack = job.stack;
+  try {
+    const r = expandDecl(text, job.decl, ctx, job.listName, job.depth);
+    if (r.def?.type === 'object') Object.assign(job.properties, r.def.properties);
+    ctx.lateRecognized.push(...r.recognized);
+  } finally {
+    ctx.stack = saved;
+  }
+}
+
+/** Expand `decl` (already on `ctx.stack`). Spans are not kept: the patch targets are the
+ *  declaration's own fields, not each use. */
+function expandDecl(text: string, decl: TsDecl, ctx: TsCtx, listName: string, depth: number): TypeResult {
+  // Inside the declaration, field lists use `Decl.field` labels (once per source field)
+  let r: TypeResult;
+  if (decl.kind === 'interface' && decl.body) {
+    const up = inheritedMembers(text, decl, ctx, decl.name, listName, new Set([decl.name]));
+    const own = parseTypeScriptBody(text, decl.body[0], decl.body[1], decl.name, listName, depth + 1, ctx);
+    r = {
+      def: { type: 'object', name: decl.name, properties: { ...up.properties, ...own.properties } },
+      spans: [],
+      recognized: [...up.recognized, ...own.recognized],
+      unrecognized: [...up.unrecognized, ...own.unrecognized],
+    };
+  } else if (decl.rhs) {
+    r = parseTypeExpr(text, decl.rhs[0], decl.rhs[1], decl.name, listName, depth + 1, ctx);
+    // An alias's own value (`type Name = string`): unrecognized under the alias name
+    if (!r.def && !r.capped) report(ctx, decl.name);
+    if (r.def?.type === 'object' && !r.def.name) r = { ...r, def: { ...r.def, name: decl.name } };
+  } else {
+    return noType();
+  }
+  const prefix = `${listName}.`;
+  // Root fields stay bare (as at the top level), so a cycle back to the root doesn't report them twice
+  const label = (field: string) => (decl.name === ctx.root ? field : `${decl.name}.${field}`);
+  for (const u of r.unrecognized) report(ctx, u.startsWith(prefix) ? label(u.slice(prefix.length)) : u);
+  return { def: r.def, capped: r.capped, spans: [], recognized: r.recognized, unrecognized: [] };
+}
+
+function report(ctx: TsCtx, label: string): void {
+  if (!ctx.reportedSet.has(label)) { ctx.reportedSet.add(label); ctx.reported.push(label); }
+}
+
+/** A capped reference inside a list/map: an empty list / map. */
+const cappedArray = (): MockDefinition => ({ type: 'array', itemType: { type: 'null' }, length: 0 });
+
+/**
+ * Parse the members of a brace body `text[from, to)` (offsets are absolute in the
+ * source, so spans need no rebasing). `parentPath` is the dotted path including the
+ * root type name (for spans); `relPath` is the path from the root type, used for the
+ * recognized/unrecognized lists (top-level fields are bare names).
+ */
+function parseTypeScriptBody(text: string, from: number, to: number, parentPath: string, relPath: string, depth: number, ctx: TsCtx): BodyResult {
   const properties: Record<string, MockPropertyDefinition> = {};
   const spans: ValueSpan[] = [];
   const recognized: string[] = [];
   const unrecognized: string[] = [];
+  // `name: Type`, `name?: Type`, `readonly name: Type`, `"quoted-name": Type`
+  const memberRe = /(?:readonly\s+)?(\w+|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')\s*(\?)?\s*:/y;
 
-  // Field parser: `field: Type` or `field?: Type`, or `field: {` opening a nested object type
-  const fieldRegex = /(\w+)\s*(\?)?\s*:\s*([^;,\n{}]+|\{)/g;
-  let match;
-
-  while ((match = fieldRegex.exec(body)) !== null) {
-    const [, fieldName, isOptional, typeDef] = match;
-    const fullFieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
-    const listName = relPath ? `${relPath}.${fieldName}` : fieldName;
-    const matchEnd = match.index + match[0].length;
-
-    if (typeDef === '{' || body[matchEnd] === '{') {
-      // Inline object type: brace-match it so its fields don't leak into this level.
-      const open = matchEnd + (typeDef === '{' ? 0 : 1);
-      const close = matchBrace(body, open);
-      if (close < 0) { unrecognized.push(listName); break; }
-      fieldRegex.lastIndex = close + 1;
-      if (typeDef !== '{' || fieldName === UNSAFE_KEY) {
-        // e.g. `x: Array<{ a: string }>`: a generic wrapping an object; skip it whole
-        unrecognized.push(listName);
-        continue;
+  let i = from;
+  while (i < to) {
+    while (i < to && /[\s;,]/.test(text[i])) i++;
+    if (i >= to) break;
+    memberRe.lastIndex = i;
+    const m = memberRe.exec(text);
+    if (!m || m.index + m[0].length > to) {
+      // Not a `name: Type` member (method, index/call signature, ...): skip it whole.
+      const stop = scanTypeEnd(text, i, to);
+      const raw = text.slice(i, stop).trim();
+      if (raw) {
+        const name = raw.startsWith('[') ? '[index signature]' : (/^(?:readonly\s+)?(\w+)/.exec(raw)?.[1] ?? raw.slice(0, 24));
+        unrecognized.push(relPath ? `${relPath}.${name}` : name);
       }
-      const inner = parseTypeScriptBody(body.slice(open, close), fullFieldPath, bodyOffset + open, listName);
-      let mock: MockDefinition = { type: 'object', properties: inner.properties };
-      const arr = /^\s*\[\]/.exec(body.slice(close + 1));
-      if (arr) {
-        mock = { type: 'array', itemType: mock };
-        fieldRegex.lastIndex = close + 1 + arr[0].length;
-      }
-      properties[fieldName] = { mock, optional: !!isOptional };
-      spans.push(...inner.spans);
-      recognized.push(listName, ...inner.recognized);
-      unrecognized.push(...inner.unrecognized);
+      i = Math.max(stop, i + 1);
       continue;
     }
 
+    let fieldName = m[1];
+    if (fieldName[0] === '"' || fieldName[0] === "'") fieldName = fieldName.slice(1, -1);
+    const optional = !!m[2];
+    const typeStart = i + m[0].length;
+    const typeEnd = scanTypeEnd(text, typeStart, to);
+    i = Math.max(typeEnd, typeStart + 1);
+    const fullFieldPath = parentPath ? `${parentPath}.${fieldName}` : fieldName;
+    const listName = relPath ? `${relPath}.${fieldName}` : fieldName;
+
     if (fieldName === UNSAFE_KEY) { unrecognized.push(listName); continue; }
 
-    // Parse the type definition (typeDef starts right after `:\s*`, so its offset is exact)
-    const typeOffset = bodyOffset + matchEnd - typeDef.length;
-    const { definition, spanStart, spanEnd, quote } = parseTypeScriptType(typeDef, typeOffset);
+    ctx.budget--;
+    const t = parseTypeExpr(text, typeStart, typeEnd, fullFieldPath, listName, depth + 1, ctx);
+    const mock: MockDefinition | null = t.capped ? { type: 'null' } : t.def;
+    if (!mock) { unrecognized.push(listName); continue; }
 
-    if (definition) {
-      properties[fieldName] = { mock: definition, optional: !!isOptional };
-      
-      spans.push({
-        fieldPath: fullFieldPath,
-        mockKey: fullFieldPath,
-        start: spanStart,
-        end: spanEnd,
-        quote,
-      });
-
-      recognized.push(listName);
-    } else {
-      unrecognized.push(listName);
+    properties[fieldName] = { mock, optional };
+    if (t.span) {
+      spans.push({ fieldPath: fullFieldPath, mockKey: fullFieldPath, start: t.span.start, end: t.span.end, quote: t.span.quote });
     }
+    spans.push(...t.spans);
+    recognized.push(listName, ...t.recognized);
+    unrecognized.push(...t.unrecognized);
   }
-  
+
   return { properties, spans, recognized, unrecognized };
 }
 
-function parseTypeScriptType(typeDef: string, baseOffset: number): {
-  definition: MockDefinition | null;
-  spanStart: number;
-  spanEnd: number;
-  quote: string;
-} {
-  const trimmed = typeDef.trim();
-  
-  // Handle array types: Type[]
-  if (/^(\w+)\[\]$/.test(trimmed)) {
-    const elementType = trimmed.slice(0, -2);
-    return {
-      definition: {
-        type: 'array',
-        itemType: parseTypeScriptType(elementType, 0).definition ?? { type: 'any' },
-      },
-      spanStart: baseOffset + typeDef.indexOf(elementType),
-      spanEnd: baseOffset + typeDef.indexOf('['),
-      quote: '',
-    };
+const PRIMITIVES: Record<string, MockPrimitiveDefinition['type']> = {
+  'string': 'string',
+  'number': 'number',
+  'boolean': 'boolean',
+  'Date': 'date',
+  'any': 'any',
+  'unknown': 'any',
+  'null': 'null',
+  'undefined': 'null',
+};
+
+/** The value of a literal type token ("a", 'a', 42, true), or undefined. */
+function literalValue(token: string): string | number | boolean | undefined {
+  const q = /^(['"])((?:\\.|(?!\1)[^\\\n])*)\1$/.exec(token);
+  if (q) return q[2];
+  if (/^-?\d+(?:\.\d+)?$/.test(token)) return Number(token);
+  if (token === 'true' || token === 'false') return token === 'true';
+  return undefined;
+}
+
+/** Parse the type expression `text[s, e)` into a mock definition. */
+function parseTypeExpr(text: string, s: number, e: number, fieldPath: string, listName: string, depth: number, ctx: TsCtx): TypeResult {
+  if (depth > MAX_TYPE_DEPTH) return noType();
+  while (s < e && /\s/.test(text[s])) s++;
+  while (e > s && /\s/.test(text[e - 1])) e--;
+  if (s >= e) return noType();
+  // Leading `|` / `&` from a wrapped (one member per line) union or intersection
+  if (text[s] === '|' || text[s] === '&') return parseTypeExpr(text, s + 1, e, fieldPath, listName, depth + 1, ctx);
+
+  // Union: a union of literals ('a' | 'b') is an enum; otherwise the first non-null member
+  const members = splitTopLevel(text, s, e, '|');
+  if (members.length > 1) {
+    const texts = members.map(([a, b]) => text.slice(a, b).trim());
+    const real = members.filter((_, k) => texts[k] !== 'null' && texts[k] !== 'undefined');
+    const lits = real.map(([a, b]) => literalValue(text.slice(a, b).trim()));
+    if (real.length >= 2 && lits.every((v) => v !== undefined)) {
+      if (lits.every((v) => typeof v === 'boolean')) return { def: { type: 'boolean' }, spans: [], recognized: [], unrecognized: [] };
+      const first = parseTypeExpr(text, real[0][0], real[0][1], fieldPath, listName, depth + 1, ctx);
+      const values = [...new Set(lits)];
+      const type = values.every((v) => typeof v === 'number') ? 'number' : 'string';
+      return { ...first, def: { type, enum: values } };
+    }
+    const pickM = real[0] ?? members[0];
+    return parseTypeExpr(text, pickM[0], pickM[1], fieldPath, listName, depth + 1, ctx);
   }
-  
-  // Handle union types: Type1 | Type2 | ...
-  if (trimmed.includes('|')) {
-    // For now, just take the first type
-    const firstType = trimmed.split('|')[0].trim();
-    return parseTypeScriptType(firstType, baseOffset);
+  // Intersection: the object parts merged (`A & { extra: string }`). Parts not defined
+  // in the input are skipped like unknown `extends` bases; a non-object part (a
+  // branded `string & {...}`) leaves the whole intersection unmapped.
+  const parts = splitTopLevel(text, s, e, '&');
+  if (parts.length > 1) {
+    const properties: Record<string, MockPropertyDefinition> = {};
+    const out: TypeResult = { def: null, spans: [], recognized: [], unrecognized: [] };
+    let objects = 0;
+    ctx.noDefer++;
+    try {
+      for (const [a, b] of parts) {
+        const r = parseTypeExpr(text, a, b, fieldPath, listName, depth + 1, ctx);
+        if (r.capped || !r.def) continue;
+        if (r.def.type !== 'object') return noType();
+        objects++;
+        Object.assign(properties, r.def.properties);
+        out.spans.push(...r.spans);
+        out.recognized.push(...r.recognized);
+        out.unrecognized.push(...r.unrecognized);
+      }
+    } finally {
+      ctx.noDefer--;
+    }
+    return objects > 0 ? { ...out, def: { type: 'object', properties } } : noType();
   }
-  
-  // Handle literal types: "value"
-  if (/^['"](.*)['"]$/.test(trimmed)) {
-    return {
-      definition: { type: 'string', default: trimmed.slice(1, -1) },
-      spanStart: baseOffset,
-      spanEnd: baseOffset + trimmed.length,
-      quote: trimmed[0],
-    };
+
+  const last = text[e - 1];
+  if (CLOSERS.includes(last)) {
+    const g = lastGroupStart(text, s, e);
+    if (g < 0) return noType();
+    switch (last) {
+      case ']': {
+        // `T[]` (a non-empty `[...]` is a tuple or indexed access: not mapped)
+        if (g === s || text.slice(g + 1, e - 1).trim()) return noType();
+        const el = parseTypeExpr(text, s, g, fieldPath, listName, depth + 1, ctx);
+        if (el.capped) return { ...el, capped: false, def: cappedArray() };
+        return { ...el, def: { type: 'array', itemType: el.def ?? { type: 'any' } } };
+      }
+      case ')':
+        // `(T)`; anything else ending in `)` is a call/function shape
+        return g === s ? parseTypeExpr(text, g + 1, e - 1, fieldPath, listName, depth + 1, ctx) : noType();
+      case '}': {
+        if (g !== s) return noType();
+        const body = parseTypeScriptBody(text, g + 1, e - 1, fieldPath, listName, depth + 1, ctx);
+        return { def: { type: 'object', properties: body.properties }, spans: body.spans, recognized: body.recognized, unrecognized: body.unrecognized };
+      }
+      case '>': {
+        // Generic `Name<A, B>`: arguments are a balanced group, so nothing inside leaks.
+        const name = text.slice(s, g).trim();
+        const args = splitTopLevel(text, g + 1, e - 1, ',');
+        if ((name === 'Array' || name === 'ReadonlyArray') && args.length === 1) {
+          const el = parseTypeExpr(text, args[0][0], args[0][1], fieldPath, listName, depth + 1, ctx);
+          if (el.capped) return { ...el, capped: false, def: cappedArray() };
+          return { ...el, def: { type: 'array', itemType: el.def ?? { type: 'any' } } };
+        }
+        if (name === 'Record' && args.length === 2) return parseRecord(text, args[0], args[1], fieldPath, listName, depth + 1, ctx);
+        // A generic declared in the input (`Page<User>`): its shape, type parameters as any
+        const generic = ctx.decls.get(name);
+        if (generic && generic.kind !== 'enum') return resolveDecl(text, generic, ctx, listName, depth);
+        return noType();
+      }
+      default:
+        return noType();
+    }
   }
-  
-  // Primitive types
-  const primitiveMap: Record<string, MockPrimitiveDefinition['type']> = {
-    'string': 'string',
-    'number': 'number',
-    'boolean': 'boolean',
-    'Date': 'date',
-    'any': 'any',
-    'unknown': 'any',
-    'null': 'null',
-    'undefined': 'null',
-  };
-  
-  if (Object.prototype.hasOwnProperty.call(primitiveMap, trimmed)) {
-    return {
-      definition: { type: primitiveMap[trimmed] },
-      spanStart: baseOffset,
-      spanEnd: baseOffset + trimmed.length,
-      quote: '',
-    };
+
+  const token = text.slice(s, e);
+  const span = { start: s, end: e, quote: '' };
+
+  // Literal types: "value", 'value', 42, true
+  if (/^(['"])(?:\\.|(?!\1)[^\\\n])*\1$/.test(token)) {
+    return { def: { type: 'string', default: token.slice(1, -1) }, span: { ...span, quote: token[0] }, spans: [], recognized: [], unrecognized: [] };
   }
-  
-  // Custom type or unrecognized
-  return {
-    definition: null,
-    spanStart: baseOffset,
-    spanEnd: baseOffset + trimmed.length,
-    quote: '',
-  };
+  if (/^-?\d+(?:\.\d+)?$/.test(token)) {
+    return { def: { type: 'number', default: Number(token) }, span, spans: [], recognized: [], unrecognized: [] };
+  }
+  if (token === 'true' || token === 'false') {
+    return { def: { type: 'boolean', default: token === 'true' }, span, spans: [], recognized: [], unrecognized: [] };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(PRIMITIVES, token)) {
+    return { def: { type: PRIMITIVES[token] }, span, spans: [], recognized: [], unrecognized: [] };
+  }
+
+  // A type declared in the same input (interface, alias or enum)
+  const decl = /^\w+$/.test(token) ? ctx.decls.get(token) : undefined;
+  if (decl) return resolveDecl(text, decl, ctx, listName, depth);
+
+  // Custom or unrecognized type (keeps its span so `Foo[]` still locates `Foo`)
+  return { ...noType(), span: /^\w+$/.test(token) ? span : undefined };
+}
+
+/** `Record<K, V>`: literal keys become exactly those properties; any other key type
+ *  becomes a map of a few generated keys. Values come from V (any if V is unknown). */
+function parseRecord(text: string, keyRange: [number, number], valRange: [number, number], fieldPath: string, listName: string, depth: number, ctx: TsCtx): TypeResult {
+  const val = parseTypeExpr(text, valRange[0], valRange[1], fieldPath, listName, depth + 1, ctx);
+  // A capped value type: an empty map
+  if (val.capped) return { spans: [], recognized: [], unrecognized: [], def: { type: 'record', valueType: { type: 'null' }, keyCount: 0 } };
+  const valueType: MockDefinition = val.def ?? { type: 'any' };
+  const keys = splitTopLevel(text, keyRange[0], keyRange[1], '|')
+    .map(([a, b]) => text.slice(a, b).trim())
+    .filter(Boolean);
+  const literals = keys.map((k) => /^(['"])(.*)\1$/.exec(k)?.[2] ?? (/^-?\d+$/.test(k) ? k : null));
+  const base = { spans: val.spans, recognized: val.recognized, unrecognized: val.unrecognized };
+
+  if (literals.length > 0 && literals.every((k): k is string => k !== null)) {
+    const properties: Record<string, MockPropertyDefinition> = {};
+    const unrecognized = [...base.unrecognized];
+    for (const key of literals) {
+      if (key === UNSAFE_KEY) unrecognized.push(listName ? `${listName}.${key}` : key);
+      else properties[key] = { mock: valueType };
+    }
+    return { ...base, unrecognized, def: { type: 'object', properties } };
+  }
+  const keyType = keys.length > 0 && keys.every((k) => k === 'number') ? 'number' : 'string';
+  return { ...base, def: { type: 'record', valueType, keyType } };
 }
 
 function parseJSONSchemaProperties(
@@ -411,10 +925,8 @@ function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | nu
   
   switch (type) {
     case 'object': {
-      const props = node.properties && typeof node.properties === 'object'
-        ? (node.properties as Record<string, unknown>)
-        : {};
-      const required = Array.isArray(node.required) ? (node.required as string[]) : [];
+      const props = isPlainObject(node.properties) ? node.properties : {};
+      const required = Array.isArray(node.required) ? (node.required as unknown[]).filter((k): k is string => typeof k === 'string') : [];
       const properties: Record<string, MockPropertyDefinition> = {};
       for (const [key, child] of Object.entries(props)) {
         if (key === UNSAFE_KEY) continue;
@@ -426,7 +938,7 @@ function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | nu
     case 'array':
       return { type: 'array', itemType: jsonSchemaToDefinition(node.items, depth + 1) ?? { type: 'any' } };
     case 'string': {
-      const def: MockPrimitiveDefinition = { type: node.format === 'date-time' || node.format === 'date' ? 'date' : 'string' };
+      const def: MockPrimitiveDefinition = { type: node.format === 'date-time' ? 'date' : 'string' };
       if (def.type === 'string' && typeof node.format === 'string') def.format = node.format;
       if (typeof node.minLength === 'number') def.minLength = node.minLength;
       if (typeof node.maxLength === 'number') def.maxLength = node.maxLength;
@@ -450,7 +962,18 @@ function jsonSchemaToDefinition(schema: unknown, depth = 0): MockDefinition | nu
   }
 }
 
-/** Infer a mock definition from a sample JSON value; primitives keep the sample as their default. */
+const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const HTTP_URL = /^https?:\/\/\S+$/i;
+
+/**
+ * Infer a mock definition from a sample JSON value. Recognizable string shapes
+ * (ISO dates, uuids, emails, URLs) become formats; other primitives keep the sample
+ * as an `example` (it sizes numbers and stands in for strings the field name says
+ * nothing about), so the output varies instead of echoing the input.
+ */
 function buildMockConfigFromValue(value: unknown, depth = 0): MockDefinition {
   if (depth > 10) return { type: 'any' };
   if (Array.isArray(value)) {
@@ -468,9 +991,20 @@ function buildMockConfigFromValue(value: unknown, depth = 0): MockDefinition {
     return { type: 'object', properties };
   }
   if (value === null) return { type: 'null' };
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return { type: typeof value as 'string' | 'number' | 'boolean', default: value };
+  if (typeof value === 'string') {
+    if (ISO_DATETIME.test(value)) return { type: 'date' };
+    if (ISO_DATE.test(value)) return { type: 'string', format: 'date' };
+    if (UUID.test(value)) return { type: 'string', format: 'uuid' };
+    if (EMAIL.test(value)) return { type: 'string', format: 'email' };
+    if (HTTP_URL.test(value)) return { type: 'string', format: 'url' };
+    return { type: 'string', example: value };
   }
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) return { type: 'number', example: value };
+    const decimals = (String(value).split('.')[1] ?? '').length;
+    return { type: 'number', integer: false, precision: Math.min(6, Math.max(1, decimals)), example: value };
+  }
+  if (typeof value === 'boolean') return { type: 'boolean' };
   return { type: 'any' };
 }
 
@@ -542,7 +1076,7 @@ export const IMPORT_PROMPT = [
   'Extract the data schema from my project as a self-contained snippet I can paste into Mockwave to generate mocks.',
   '',
   'Rules:',
-  '- Output ONLY the data structure definition: TypeScript interfaces/types, JSON Schema, or plain JSON.',
+  '- Output ONLY the data structure definition: TypeScript interfaces/types, JSON Schema, GraphQL SDL, or plain JSON.',
   '- One type/interface per snippet for best results.',
   '- Keep field names exactly as they appear in your code.',
   '- Use primitive types (string, number, boolean, Date) where possible.',
@@ -558,5 +1092,6 @@ export const IMPORT_FORMAT_HELP = [
   '  • TypeScript types: type User = { id: string; name: string; };',
   '  • JSON Schema: { "type": "object", "properties": { "id": { "type": "string" } } }',
   '  • Plain JSON data: { "id": "123", "name": "John" } (will infer schema)',
+  '  • GraphQL SDL: type User { id: ID! name: String friends: [User!]! }',
   'Use standard primitive types. Custom types may need AI assistance for full mocking.',
 ].join('\n');

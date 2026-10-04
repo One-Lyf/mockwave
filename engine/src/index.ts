@@ -5,3 +5,6 @@
 export * from './types';
 export * from './mockGenerator';
 export * from './codeImport';
+export * from './graphqlImport';
+export { classifyField, fieldTokens } from './fieldHints';
+export type { FieldHint, NumberHint, DateHint } from './fieldHints';

@@ -24,6 +24,7 @@ export interface MockConfig {
 export type MockDefinition =
   | MockObjectDefinition
   | MockArrayDefinition
+  | MockRecordDefinition
   | MockPrimitiveDefinition;
 
 /**
@@ -31,6 +32,8 @@ export type MockDefinition =
  */
 export interface MockObjectDefinition {
   type: 'object';
+  /** The source type's name (`Address`), when it has one: field-name hints read it as context. */
+  name?: string;
   /** Mock configuration for each property */
   properties: Record<string, MockPropertyDefinition>;
 }
@@ -51,12 +54,28 @@ export interface MockArrayDefinition {
 }
 
 /**
+ * Definition for a map type (TypeScript `Record<string, V>`): an object with a few
+ * generated keys, each holding a value generated from `valueType`.
+ */
+export interface MockRecordDefinition {
+  type: 'record';
+  /** Mock configuration for every value */
+  valueType: MockDefinition;
+  /** Shape of the generated keys (default 'string') */
+  keyType?: 'string' | 'number';
+  /** How many keys to generate (default 3, capped at 20) */
+  keyCount?: number;
+}
+
+/**
  * Definition for a primitive type.
  */
 export interface MockPrimitiveDefinition {
   type: 'string' | 'number' | 'boolean' | 'date' | 'null' | 'any';
   /** Default value for this primitive */
   default?: unknown;
+  /** Allowed values (e.g. a GraphQL enum); one is picked per generated value */
+  enum?: unknown[];
   /** For strings: format (uuid, email, url, etc.) */
   format?: string;
   /** For strings: min length */
@@ -69,10 +88,16 @@ export interface MockPrimitiveDefinition {
   minimum?: number;
   /** For numbers: max value */
   maximum?: number;
-  /** For numbers: is integer */
+  /** For numbers: true = integers, false = decimals; unset = integers unless the field name suggests decimals (price, rating) */
   integer?: boolean;
   /** For non-integer numbers: decimal places to round to (default 2) */
   precision?: number;
+  /**
+   * A sample value from the source (e.g. sample JSON). It sizes generated numbers and
+   * stands in for strings the field name says nothing about; it is never echoed for
+   * names that suggest a value (id, email, price...).
+   */
+  example?: unknown;
 }
 
 /**
@@ -143,9 +168,12 @@ export interface GeneratedMock {
  * Options for mock generation.
  */
 export interface MockOptions {
-  /** Seed for reproducible randomness */
+  /** Seed for reproducible randomness: the same seed yields identical data. Omit for random output. */
   seed?: string | number;
-  /** Number of items to generate (for arrays) */
+  /** Anchor for relative dates (default: now; a fixed 2026-01-01 UTC epoch when `seed` is set, so seeded output stays reproducible) */
+  referenceDate?: string | Date;
+  /** Number of items to generate (for arrays). One call generates at most 50,000 values;
+   *  past that, lists come out empty and other values null. */
   count?: number;
   /** Whether to include null/undefined values */
   includeNulls?: boolean;
