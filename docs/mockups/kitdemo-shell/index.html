@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitdemo Shell: Three Options</title>
+<style>
+/* Mockwave tokens (app/src/index.css). Mockup only: static data, no store. */
+:root{--bg-1:#fff;--bg-2:#f6f6f6;--bg-3:#eee;--surface-1:#f4f4f5;--surface-2:#fff;--surface-3:#d4d4d8;--ink-1:#111;--ink-2:#52525b;--ink-3:#71717a;--accent:#c62828;--accent-2:#d84343;--accent-3:#f3c4c4;--ok:#2e7d32;
+--font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+:root[data-theme=dark]{--bg-1:#000;--bg-2:#111;--bg-3:#1a1a1a;--surface-1:#222;--surface-2:#2a2a2a;--surface-3:#333;--ink-1:#fff;--ink-2:#a0a0a0;--ink-3:#606060;--accent:#ff4444;--accent-2:#ff6666;--accent-3:#882222;--ok:#66bb6a}
+*{box-sizing:border-box;margin:0;padding:0}
+html{font-family:var(--font);font-size:14px;line-height:1.4;color-scheme:light}
+html[data-theme=dark]{color-scheme:dark}
+body{background:var(--bg-1);color:var(--ink-1);overflow-x:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* Overview (no ?opt): three frames side by side */
+.overview{display:flex;gap:24px;padding:24px;flex-wrap:wrap;justify-content:center;background:var(--bg-2)}
+.overview .col h2{font-size:15px;margin:0 0 4px}
+.overview .col p{color:var(--ink-2);max-width:390px;margin-bottom:10px;font-size:13px}
+.overview .phone{width:390px;height:844px;border:1px solid var(--surface-3);border-radius:28px;overflow:hidden;position:relative}
+
+.phone{width:100%;height:100vh;max-height:844px;position:relative;display:flex;flex-direction:column;background:var(--bg-1);overflow:hidden}
+body.single .phone{max-height:none;height:100vh}
+
+.top{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;border-bottom:1px solid var(--surface-3);min-width:0}
+.top h1{font-size:18px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 9px;border-radius:99px;background:var(--surface-1);color:var(--ink-2);border:1px solid var(--surface-3);white-space:nowrap}
+.chip i{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.body{flex:1;overflow-y:auto;padding:14px 16px 90px;min-height:0}
+.card{background:var(--surface-1);border:1px solid var(--surface-3);border-radius:12px;padding:14px;margin-bottom:12px;min-width:0}
+.card h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);margin-bottom:8px}
+.row{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--surface-3);min-width:0}
+.row:first-of-type{border-top:0}
+.row .main{flex:1;min-width:0}
+.row .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s{font-size:12px;color:var(--ink-2)}
+.kcal{font-variant-numeric:tabular-nums;color:var(--ink-2);font-size:13px}
+.kind{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);width:74px;flex:none}
+.empty{color:var(--ink-3);font-size:13px;padding:6px 0}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:10px;background:var(--accent);color:#fff;font-weight:600}
+html[data-theme=dark] .btn{color:#000}
+.btn.ghost{background:var(--surface-2);color:var(--ink-1);border:1px solid var(--surface-3)}
+.fab{position:absolute;right:16px;bottom:78px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+html[data-theme=dark] .fab{color:#000}
+.tabs{position:absolute;left:0;right:0;bottom:0;display:flex;background:var(--bg-2);border-top:1px solid var(--surface-3);padding:6px 0 14px}
+.tabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--ink-3);padding:4px 0;min-width:0}
+.tabs button.on{color:var(--accent)}
+.seg{display:flex;background:var(--surface-1);border:1px solid var(--surface-3);border-radius:10px;padding:3px;margin-bottom:12px}
+.seg button{flex:1;padding:7px 4px;border-radius:8px;font-size:13px;color:var(--ink-2);min-width:0;white-space:nowrap}
+.seg button.on{background:var(--surface-2);color:var(--ink-1);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.hide{display:none!important}
+.ring{--p:.285;width:92px;height:92px;border-radius:50%;background:conic-gradient(var(--accent) calc(var(--p)*360deg),var(--surface-3) 0);display:grid;place-items:center;flex:none}
+.ring b{width:72px;height:72px;border-radius:50%;background:var(--surface-1);display:grid;place-items:center;font-size:15px;text-align:center;line-height:1.15}
+.ring small{display:block;font-size:10px;color:var(--ink-2);font-weight:400}
+.goalrow{display:flex;gap:14px;align-items:center}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:var(--surface-2);border-top:1px solid var(--surface-3);border-radius:18px 18px 0 0;padding:14px 16px 18px;box-shadow:0 -8px 24px rgba(0,0,0,.25)}
+.sheet h3{font-size:15px;margin-bottom:10px;text-transform:none;letter-spacing:0;color:var(--ink-1)}
+.fld{margin-bottom:10px}
+.fld label{display:block;font-size:11px;color:var(--ink-2);margin-bottom:3px}
+.fld div{padding:9px 10px;border:1px solid var(--surface-3);border-radius:8px;background:var(--bg-1);font-size:14px;display:flex;justify-content:space-between;gap:8px}
+.fld div span{color:var(--ink-3)}
+.note{font-size:12px;color:var(--ink-3);margin-top:6px}
+.scrim{position:absolute;inset:0;background:rgba(0,0,0,.35)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);padding:6px 6px 6px 0;border-bottom:1px solid var(--surface-3)}
+td{padding:9px 6px 9px 0;border-bottom:1px solid var(--surface-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.gen{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-2);margin-bottom:10px}
+.gen code{font-family:ui-monospace,Menlo,monospace;background:var(--surface-1);padding:2px 6px;border-radius:6px;border:1px solid var(--surface-3)}
+</style>
+</head>
+<body>
+<script>
+const q = new URLSearchParams(location.search);
+if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme');
+const ICON = {
+  home:'<svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8M5 10v10h14V10"/></svg>',
+  food:'<svg viewBox="0 0 24 24"><path d="M6 3v8a3 3 0 0 0 3 3v7M9 3v6M12 3v8a3 3 0 0 1-3 3M17 3c-2 2-3 5-3 8h3v10"/></svg>',
+  goal:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8"/></svg>',
+  plus:'<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  chev:'<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>',
+  more:'<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
+  meal:'<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>'
+};
+const FOODS = [['Oatmeal',150],['Banana',105],['Chicken Salad',420],['Greek Yogurt',120]];
+const MEALS = [['Breakfast','Oatmeal',150],['Lunch','Chicken Salad',420]];
+const chip = '<span class="chip"><i></i>On This Device</span>';
+
+function mealRows(){ return MEALS.map(m=>`<div class="row"><span class="kind">${m[0]}</span><div class="main"><div class="t">${m[1]}</div></div><span class="kcal">${m[2]} kcal</span></div>`).join('')
+  + `<div class="row"><span class="kind">Dinner</span><div class="main empty">Nothing Yet</div></div>`; }
+function foodRows(){ return FOODS.map(f=>`<div class="row"><div class="main"><div class="t">${f[0]}</div></div><span class="kcal">${f[1]} kcal</span>${ICON.chev}</div>`).join(''); }
+function addSheet(){ return `<div class="scrim"></div><div class="sheet"><h3>Log Meal</h3>
+  <div class="fld"><label>Food</label><div>Greek Yogurt <span>Pick From Foods</span></div></div>
+  <div class="fld"><label>Kind</label><div>Dinner <span>Breakfast / Lunch / Dinner</span></div></div>
+  <div class="fld"><label>Eaten At</label><div>Today, 6:30 pm</div></div>
+  <div class="fld"><label>Note (Optional)</label><div><span>Add a Note</span></div></div>
+  <div style="display:flex;gap:8px"><button class="btn ghost" style="flex:1;justify-content:center">Cancel</button><button class="btn" style="flex:1;justify-content:center">Save Meal</button></div></div>`; }
+
+/* A: three tabs, one per entity */
+function optA(){
+  return `<div class="phone" data-opt="a">
+  <div class="top"><h1>Kitdemo</h1>${chip}</div>
+  <div class="body">
+    <div data-pane="today"><div class="card"><h3>Today</h3>${mealRows()}</div>
+      <div class="card"><h3>Goal</h3><div class="row"><div class="main"><div class="t">2,000 kcal</div><div class="s">Active</div></div><span class="kcal">570 eaten</span></div></div></div>
+    <div data-pane="foods" class="hide"><div class="card"><h3>Foods</h3>${foodRows()}</div></div>
+    <div data-pane="goal" class="hide"><div class="card"><h3>Goal</h3><div class="row"><div class="main"><div class="t">2,000 kcal</div><div class="s">Active</div></div>${ICON.chev}</div></div></div>
+  </div>
+  <button class="fab" aria-label="Log Meal">${ICON.plus}</button>
+  <div class="tabs"><button class="on" data-tab="today">${ICON.meal}Meals</button><button data-tab="foods">${ICON.food}Foods</button><button data-tab="goal">${ICON.goal}Goal</button></div>
+  ${q.get('sheet')==='1'?addSheet():''}</div>`;
+}
+/* B: one dashboard; Foods and Goal reached from it */
+function optB(){
+  return `<div class="phone" data-opt="b">
+  <div class="top"><h1>Kitdemo</h1>${chip}<button aria-label="Menu">${ICON.more}</button></div>
+  <div class="body">
+    <div class="card"><div class="goalrow"><div class="ring"><b><span>570<small>of 2,000</small></span></b></div>
+      <div style="min-width:0"><h3 style="margin-bottom:2px">Daily Goal</h3><div class="t" style="font-size:20px;font-weight:700">1,430 kcal Left</div><div class="s" style="color:var(--ink-2)">Goal Active</div></div></div></div>
+    <div class="card"><h3>Today's Meals</h3>${mealRows()}<div style="margin-top:10px"><button class="btn" style="width:100%;justify-content:center">${ICON.plus}Log Meal</button></div></div>
+    <div class="card"><h3>Foods</h3><div class="row"><div class="main"><div class="t">4 Foods</div><div class="s">Oatmeal, Banana, Chicken Salad, Greek Yogurt</div></div>${ICON.chev}</div></div>
+    <p class="note">Foods and Goal open as their own screens. One tap back.</p>
+  </div>
+  ${q.get('sheet')==='1'?addSheet():''}</div>`;
+}
+/* C: schema-driven console, one segmented entity picker, generated list and form */
+function optC(){
+  return `<div class="phone" data-opt="c">
+  <div class="top"><h1>Kitdemo</h1>${chip}</div>
+  <div class="body">
+    <div class="seg" role="tablist"><button data-seg="food">Food</button><button class="on" data-seg="meal">Meal</button><button data-seg="goal">Goal</button></div>
+    <div class="gen">Generated From <code>schema.json</code></div>
+    <div class="card" data-pane="meal"><h3>Meal (2)</h3>
+      <table><thead><tr><th>Food</th><th>Kind</th><th>Eaten</th></tr></thead><tbody>
+      <tr><td>Oatmeal</td><td>breakfast</td><td>7:40 am</td></tr>
+      <tr><td>Chicken Salad</td><td>lunch</td><td>12:15 pm</td></tr></tbody></table></div>
+    <div class="card hide" data-pane="food"><h3>Food (4)</h3>
+      <table><thead><tr><th>Name</th><th>Kcal</th></tr></thead><tbody>${FOODS.map(f=>`<tr><td>${f[0]}</td><td>${f[1]}</td></tr>`).join('')}</tbody></table></div>
+    <div class="card hide" data-pane="goal"><h3>Goal (1)</h3>
+      <table><thead><tr><th>Kcal</th><th>Active</th></tr></thead><tbody><tr><td>2000</td><td>true</td></tr></tbody></table></div>
+    <button class="btn" style="width:100%;justify-content:center">${ICON.plus}New Meal</button>
+    <p class="note">Create, Update and Delete come from the store's generated actions. Deleted meals can be restored.</p>
+  </div>
+  ${q.get('sheet')==='1'?addSheet():''}</div>`;
+}
+
+const opt = q.get('opt');
+const titles = {a:['A. Tabs By Entity','One tab each for Meals, Foods and Goal. A floating button logs a meal. Familiar, three taps to any record.'],
+  b:['B. Today Dashboard','One glanceable screen: goal ring, today\'s meals, a Foods summary. The 3 entities read as one app, not three lists.'],
+  c:['C. Generated Console','A segmented entity picker over generated lists and forms. Proves schema in, shell out, and is what any new schema gets for free.']};
+const make = {a:optA,b:optB,c:optC};
+if (opt && make[opt]) { document.body.classList.add('single'); document.body.innerHTML = make[opt](); }
+else document.body.innerHTML = '<div class="overview">' + ['a','b','c'].map(k=>`<div class="col"><h2>${titles[k][0]}</h2><p>${titles[k][1]}</p><div class="phone">${make[k]().replace(/^<div class="phone"[^>]*>/,'').replace(/<\/div>$/,'')}</div></div>`).join('') + '</div>';
+
+document.addEventListener('click', e=>{
+  const t = e.target.closest('[data-tab]'); const s = e.target.closest('[data-seg]');
+  if (t){ const root=t.closest('.phone'); root.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('on',b===t));
+    root.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hide',p.dataset.pane!==t.dataset.tab)); }
+  if (s){ const root=s.closest('.phone'); root.querySelectorAll('[data-seg]').forEach(b=>b.classList.toggle('on',b===s));
+    root.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hide',p.dataset.pane!==s.dataset.seg)); }
+});
+</script>
+</body>
+</html>
