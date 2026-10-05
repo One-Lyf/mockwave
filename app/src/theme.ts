@@ -1,4 +1,4 @@
-// Theme mode: light / dark / system, the WaveRider pattern (see Rackwave's
+// Theme mode: light / dark / system, the same pattern as Rackwave (see its
 // app/src/theme.ts). The palette lives in index.css as [data-theme] blocks;
 // this module only stores the choice and applies the resolved theme to <html>.
 export type ThemeMode = 'light' | 'dark' | 'system';

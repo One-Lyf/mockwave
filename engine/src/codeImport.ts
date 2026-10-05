@@ -233,7 +233,7 @@ export function parseSchema(code: string): SchemaImport | null {
   const gqlResult = parseGraphQLSchema(code);
   if (gqlResult) return gqlResult;
 
-  // Then TypeScript (most common for WaveRider users)
+  // Then TypeScript (most common)
   const tsResult = parseTypeScriptSchema(code);
   if (tsResult) return tsResult;
   
