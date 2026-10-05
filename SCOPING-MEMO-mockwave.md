@@ -9,7 +9,7 @@
 
 ## What
 
-Build Mockwave as a standalone application — the third member of WaveRider (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). Mockwave applies the **copy-as-code pattern** to data mocking: import your real data schema, configure mocking rules, generate realistic mock data, and copy the generated code back into your project.
+Build Mockwave as a standalone application — the third member of the suite (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). Mockwave applies the **copy-as-code pattern** to data mocking: import your real data schema, configure mocking rules, generate realistic mock data, and copy the generated code back into your project.
 
 This node covers **scaffold-only** (first milestone per DISPATCH):
 - [x] Repository created (`github.com/One-Lyf/mockwave`)
@@ -25,7 +25,7 @@ Full standalone-ship parity with Rackwave/Fluxwave is a **later gate**, not this
 
 ## Why
 
-Jeff's live directive (2026-09-05): "Have Whisperers begin scaffolding Mockwave too." WaveRider has proven the copy-as-code pattern works:
+Jeff's live directive (2026-09-05): "Have Whisperers begin scaffolding Mockwave too." The suite has proven the copy-as-code pattern works:
 
 - **Rackwave** (audio): import Web Audio code → tune → export patched code with only audio values changed
 - **Fluxwave** (UI): import UI code → edit → export patched code with only visual/behavioral values changed  
@@ -51,7 +51,7 @@ mockwave/
 │   ├── src/
 │   │   ├── main.tsx           # Entry point
 │   │   ├── App.tsx            # Main app component
-│   │   └── index.css         # Base styles (WaveRider theme)
+│   │   └── index.css         # Base styles (suite theme)
 │   └── public/
 │       └── favicon.svg
 └── engine/                     # Core logic package
@@ -137,7 +137,7 @@ Type definitions mirroring Rackwave/Fluxwave patterns:
 
 ### Frontend: `App.tsx`
 
-Basic UI structure matching the WaveRider pattern:
+Basic UI structure matching the suite pattern:
 
 - **Import panel**: Textarea for schema input, import button
 - **Export panel**: Generated mock output, Code/Diff tabs
@@ -357,7 +357,7 @@ From DISPATCH.md gate for `mockwave-standalone-ship`:
 - `index.html` — HTML entry point
 - `src/main.tsx` — React entry point
 - `src/App.tsx` — Main app component with import/export panels
-- `src/index.css` — Base styles (WaveRider theme)
+- `src/index.css` — Base styles (suite theme)
 
 ### `engine/` (Core Logic)
 - `package.json` — Engine package config
@@ -382,7 +382,7 @@ npm run dev
 Open `http://localhost:3003`, paste a TypeScript interface, and verify:
 - [ ] Schema is parsed (recognized fields appear)
 - [ ] Mock data is generated
-- [ ] UI matches WaveRider aesthetic
+- [ ] UI matches the suite aesthetic
 - [ ] Copy actions work
 - [ ] Responsive at 390px width
 
