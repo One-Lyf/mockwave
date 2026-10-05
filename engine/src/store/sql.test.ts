@@ -26,6 +26,12 @@ describe('schemaToSql', () => {
     expect(() => schemaToSql('x', { entities: [{ name: 'chore', scope: 'household', fields: [] }] })).toThrow('household');
   });
 
+  it('quotes the app schema, so a reserved word is a valid slug', () => {
+    const sql = schemaToSql('user', { entities: [{ name: 'a', scope: 'user', fields: [] }] });
+    expect(sql).toContain('create schema if not exists "user";');
+    expect(sql).toContain('create table "user"."a" (');
+  });
+
   it('escapes quotes in enum values', () => {
     const sql = schemaToSql('x', { entities: [{ name: 'a', scope: 'user', fields: [{ name: 'k', type: 'enum', enum: ["it's"] }] }] });
     expect(sql).toContain(`'it''s'`);
@@ -72,11 +78,12 @@ describe.skipIf(!pgBin)('owner scoping on the kitdemo migration (two users)', ()
     if (asRoot) execFileSync('chown', ['postgres', dir]);
     run('initdb', ['-D', join(dir, 'data'), '-U', 'postgres', '-A', 'trust']);
     run('pg_ctl', ['-D', join(dir, 'data'), '-l', join(dir, 'log'), '-o', `-k ${dir} -p ${port} -c listen_addresses=''`, '-w', 'start']);
-    // What the W2 app stack provides: the API roles and GoTrue's claim-reading auth.uid().
+    // What the W2 app stack provides: the API roles, and auth.uid() with the same body as
+    // citadel infra/stacks/templates/db/auth-helpers.sql (reads request.jwt.claims, as PostgREST v14 sets it).
     psql(`create role anon nologin; create role authenticated nologin; create schema auth;
       create function auth.uid() returns uuid language sql stable as $$
-        select nullif(coalesce(current_setting('request.jwt.claim.sub', true),
-          (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')), '')::uuid $$;
+        select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''),
+          (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid $$;
       grant usage on schema auth to anon, authenticated;`);
     psql(readFileSync(MIGRATION, 'utf8'));
     as(A, food(fA, 'Oats'));

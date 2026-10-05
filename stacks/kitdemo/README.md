@@ -16,4 +16,8 @@ The 3-entity proof app for K1 (food, meal, goal). One W2 app stack, `onelyf-kitd
 4. Client: `stackBackend({ url: '<stack url>', key: '<publishable key>', schema: 'kitdemo', accessToken })`.
 
 The owner-scoping tests in `engine/src/store/sql.test.ts` run this same migration against a local
-Postgres with two users.
+Postgres with two users. Their `auth.uid()` has the same body as citadel
+`infra/stacks/templates/db/auth-helpers.sql`: it reads `sub` from `request.jwt.claims` (what PostgREST v14
+sets) and still honors the legacy `request.jwt.claim.sub`.
+
+`stackBackend` refuses a service-role or `sb_secret_` key: pass only the publishable key.
