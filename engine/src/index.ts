@@ -9,3 +9,5 @@ export * from './graphqlImport';
 export * from './store';
 export { classifyField, fieldTokens } from './fieldHints';
 export type { FieldHint, NumberHint, DateHint } from './fieldHints';
+export * from './kitdemo/form';
+export * from './kitdemo/kitdemo';
