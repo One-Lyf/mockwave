@@ -36,6 +36,10 @@ describe('formFields (EntityForm contract)', () => {
     ]);
   });
 
+  it('refuses to require an optional field the form leaves out', () => {
+    expect(() => formFields(meal, { fields: ['food', 'kind', 'eatenAt'], require: ['note'] })).toThrow(/note/);
+  });
+
   it('refuses to require a field the entity does not have', () => {
     expect(() => formFields(meal, { require: ['nope'] })).toThrow(/nope/);
   });
@@ -72,6 +76,25 @@ describe('readForm', () => {
   it('an optional field made required is enforced', () => {
     const r = readForm(formFields(meal, { require: ['note'] }), { food: 'f', kind: 'lunch', eatenAt: '2026-10-05', note: ' ' });
     expect(r.errors).toEqual({ note: 'Required' });
+  });
+});
+
+describe('editing a record', () => {
+  it('clears an optional field left blank, through the store', async () => {
+    const store = createKitdemoStore(null, { device: () => memoryBackend(), stack: () => memoryBackend() }, schema);
+    await store.load();
+    const food = await store.create('food', { name: 'Oatmeal', kcal: 150 });
+    const m = await store.create('meal', { food: food.id, kind: 'lunch', eatenAt: '2026-10-05', note: 'Big bowl' });
+    const fields = formFields(meal);
+    const edit = { food: food.id, kind: 'lunch', eatenAt: '2026-10-05', note: '  ' };
+
+    const blank = readForm(fields, edit, { clearBlank: true });
+    expect(blank.errors).toEqual({});
+    await store.update('meal', m.id, blank.values);
+    expect(store.get('meal', m.id)!.note ?? null).toBeNull();
+
+    const created = readForm(fields, edit);
+    expect('note' in created.values).toBe(false);
   });
 });
 

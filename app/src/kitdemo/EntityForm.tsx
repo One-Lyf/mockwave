@@ -60,7 +60,7 @@ export default function EntityForm({ entity, heading, saveLabel, row, defaults, 
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    const result = readForm(fields, input);
+    const result = readForm(fields, input, { clearBlank: row !== undefined });
     setErrors(result.errors);
     if (Object.keys(result.errors).length) return;
     void run(() => onSave(result.values));

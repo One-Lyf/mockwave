@@ -22,6 +22,8 @@ export function formFields(entity: EntityDef, opts: FormOptions = {}): FormField
   const unknown = [...(opts.fields ?? []), ...(opts.require ?? [])].filter((n) => !known.has(n));
   if (unknown.length) throw new Error(`${entity.name} form: no such field ${unknown.join(', ')}`);
   const shown = opts.fields ? new Set(opts.fields) : known;
+  const hidden = (opts.require ?? []).filter((n) => !shown.has(n));
+  if (hidden.length) throw new Error(`${entity.name} form: cannot require hidden field ${hidden.join(', ')}`);
   const skipped = entity.fields.filter((f) => !f.optional && !shown.has(f.name)).map((f) => f.name);
   if (skipped.length) throw new Error(`${entity.name} form: cannot skip required field ${skipped.join(', ')}`);
   const insist = new Set(opts.require ?? []);
@@ -38,7 +40,12 @@ export interface FormResult {
   errors: Record<string, string>;
 }
 
-export function readForm(fields: FormField[], input: FormInput): FormResult {
+export interface ReadOptions {
+  /** Editing an existing row: a blank optional field becomes null so the store clears it. */
+  clearBlank?: boolean;
+}
+
+export function readForm(fields: FormField[], input: FormInput, opts: ReadOptions = {}): FormResult {
   const values: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
   for (const { field, required } of fields) {
@@ -50,6 +57,7 @@ export function readForm(fields: FormField[], input: FormInput): FormResult {
     const text = typeof raw === 'string' ? raw.trim() : '';
     if (!text) {
       if (required) errors[field.name] = 'Required';
+      else if (opts.clearBlank) values[field.name] = null;
       continue;
     }
     if (field.type === 'number') {
