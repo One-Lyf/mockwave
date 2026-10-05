@@ -1,7 +1,6 @@
 /**
  * Mockwave - Data Mocking Wave
  *
- * The third app in WaveRider (Rackwave: audio, Fluxwave: UI, Mockwave: data).
  * Pattern: copy-as-code for generating realistic mock data structures.
  *
  * User flow:
@@ -225,7 +224,7 @@ interface User {
       </main>
 
       <footer className="mockwave-footer">
-        <p>WaveRider: Data Mocking for Modern Development</p>
+        <p>Data Mocking for Modern Development</p>
       </footer>
     </div>
   );
