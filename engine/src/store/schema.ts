@@ -31,7 +31,7 @@ export interface KitSchema {
 }
 
 /** Columns the store owns on every row; schema fields may not reuse them. */
-export const SYSTEM_FIELDS = ['id', 'createdAt', 'updatedAt', 'deletedAt'] as const;
+export const SYSTEM_FIELDS = ['id', 'ownerId', 'createdAt', 'updatedAt', 'deletedAt'] as const;
 
 const NAME = /^[a-z][a-zA-Z0-9]*$/;
 const FIELD_TYPES: FieldType[] = ['string', 'number', 'boolean', 'date', 'enum', 'ref'];

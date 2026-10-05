@@ -1,0 +1,31 @@
+{
+  "entities": [
+    {
+      "name": "food",
+      "scope": "user",
+      "fields": [
+        { "name": "name", "type": "string" },
+        { "name": "kcal", "type": "number" }
+      ]
+    },
+    {
+      "name": "meal",
+      "scope": "user",
+      "softDelete": true,
+      "fields": [
+        { "name": "food", "type": "ref", "to": "food" },
+        { "name": "kind", "type": "enum", "enum": ["breakfast", "lunch", "dinner"] },
+        { "name": "eatenAt", "type": "date" },
+        { "name": "note", "type": "string", "optional": true }
+      ]
+    },
+    {
+      "name": "goal",
+      "scope": "user",
+      "fields": [
+        { "name": "kcal", "type": "number" },
+        { "name": "active", "type": "boolean" }
+      ]
+    }
+  ]
+}

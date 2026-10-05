@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -p engine --noEmit && tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:sql": "UPDATE_SQL=1 vitest run engine/src/store/sql.test.ts"
   },
   "dependencies": {
     "react": "^18.2.0",
