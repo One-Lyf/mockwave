@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import schemaJson from '../../../stacks/kitdemo/schema.json';
 import { memoryBackend } from '../store/backend';
+import { stackBackend } from '../store/stackBackend';
 import type { KitSchema } from '../store/schema';
 import { formFields, readForm } from './form';
 import { chipLabel, createKitdemoStore, localDate, todaySummary } from './kitdemo';
@@ -95,6 +96,47 @@ describe('editing a record', () => {
 
     const created = readForm(fields, edit);
     expect('note' in created.values).toBe(false);
+  });
+});
+
+describe('editing a record on the signed-in stack path', () => {
+  // A PostgREST stand-in with merge-duplicates upsert: a posted row overwrites only the keys it carries.
+  function fakeStack() {
+    const tables = new Map<string, Map<string, Record<string, unknown>>>();
+    const fetch = async (url: string, init: RequestInit) => {
+      const table = new URL(url).pathname.split('/').pop()!;
+      const rows = tables.get(table) ?? tables.set(table, new Map()).get(table)!;
+      if (init.method === 'POST') {
+        const row = JSON.parse(String(init.body)) as Record<string, unknown>;
+        rows.set(row.id as string, { ...rows.get(row.id as string), ...row });
+        return new Response(null, { status: 201 });
+      }
+      const [from, to] = String((init.headers as Record<string, string>).Range ?? '0-999').split('-').map(Number);
+      return new Response(JSON.stringify([...rows.values()].slice(from, to + 1)), { status: 200 });
+    };
+    return { tables, fetch: fetch as unknown as typeof globalThis.fetch };
+  }
+
+  it('clears an optional field on the server, not only in memory', async () => {
+    const { tables, fetch } = fakeStack();
+    const session = { name: 'Jeff', accessToken: async () => 'tok' };
+    const backends = {
+      device: () => memoryBackend(),
+      stack: (s: typeof session) => stackBackend({ url: 'https://stack.test', key: 'pub', schema: 'kitdemo', accessToken: s.accessToken, fetch }),
+    };
+    const store = createKitdemoStore(session, backends, schema);
+    await store.load();
+    const food = await store.create('food', { name: 'Oatmeal', kcal: 150 });
+    const m = await store.create('meal', { food: food.id, kind: 'lunch', eatenAt: '2026-10-05', note: 'Big bowl' });
+    expect(tables.get('meal')!.get(m.id)!.note).toBe('Big bowl');
+
+    const edit = readForm(formFields(meal), { food: food.id, kind: 'lunch', eatenAt: '2026-10-05', note: '' }, { clearBlank: true });
+    await store.update('meal', m.id, edit.values);
+    expect(tables.get('meal')!.get(m.id)!.note).toBeNull();
+
+    const reloaded = createKitdemoStore(session, backends, schema);
+    await reloaded.load();
+    expect(reloaded.get('meal', m.id)!.note ?? null).toBeNull();
   });
 });
 
