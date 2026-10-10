@@ -12,6 +12,11 @@ import './kitdemo.css';
 type Screen = 'home' | 'foods' | 'goal';
 type Sheet = { entity: 'meal' | 'food' | 'goal'; row?: Row } | null;
 
+/** Coerce a history-state value to a valid Screen; unknown or missing values land on Home. */
+function toScreen(v: unknown): Screen {
+  return v === 'foods' || v === 'goal' ? v : 'home';
+}
+
 const title = (s: string) => s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 const kcal = (n: number) => `${n.toLocaleString('en-US')} kcal`;
 const num = (n: number) => n.toLocaleString('en-US');
@@ -42,10 +47,7 @@ export default function Shell({ store, session, schema }: Props) {
   const [ready, setReady] = useState<'loading' | 'ok' | string>('loading');
   // A reload keeps the entry's own screen so the header Back and system Back agree with what
   // is on screen; an unknown kdScreen falls back to Home.
-  const [screen, setScreen] = useState<Screen>(() => {
-    const s = history.state?.kdScreen;
-    return s === 'foods' || s === 'goal' ? s : 'home';
-  });
+  const [screen, setScreen] = useState<Screen>(() => toScreen(history.state?.kdScreen));
   const [sheet, setSheet] = useState<Sheet>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredThemeMode());
@@ -75,7 +77,7 @@ export default function Shell({ store, session, schema }: Props) {
     const onPop = (e: PopStateEvent) => {
       setMenuOpen(false);
       setSheet(null);
-      setScreen(e.state?.kdScreen ?? 'home');
+      setScreen(toScreen(e.state?.kdScreen));
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);

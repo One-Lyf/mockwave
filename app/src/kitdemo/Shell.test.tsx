@@ -125,6 +125,18 @@ describe('kitdemo Shell history (real jsdom history)', () => {
     expect(heading()).toBe('Foods');
     expect(history.state?.kdScreen).toBe('foods');
   });
+
+  it('popstate onto an entry with an unknown kdScreen falls back to Home', async () => {
+    await renderShell();
+    expect(heading()).toBe('Kitdemo');
+    // A stale or hand-edited entry can carry an unknown kdScreen; system back onto it must
+    // land on Home rather than trust the raw value and render it as the heading.
+    history.replaceState({ kdScreen: 'bogus' }, '');
+    await click(byLabelPrefix('Foods:'));
+    expect(heading()).toBe('Foods');
+    await systemBack();
+    expect(heading()).toBe('Kitdemo');
+  });
 });
 
 describe('kitdemo Shell goal screen', () => {
@@ -174,6 +186,16 @@ describe('kitdemo Shell reload (mount reads the entry state)', () => {
     // renderShell pushes {kdScreen:'foods'} on the base entry before rendering, like a reload.
     await renderShell([], { kdScreen: 'foods' });
     expect(heading()).toBe('Foods');
+
+    await click(byLabel('Back'));
+    expect(heading()).toBe('Kitdemo');
+    expect(history.state).toBe(null);
+  });
+
+  it('mounts on Goal after a reload onto the goal entry: one header Back reaches Home', async () => {
+    // renderShell pushes {kdScreen:'goal'} on the base entry before rendering, like a reload.
+    await renderShell([], { kdScreen: 'goal' });
+    expect(heading()).toBe('Goal');
 
     await click(byLabel('Back'));
     expect(heading()).toBe('Kitdemo');
