@@ -32,7 +32,11 @@ afterEach(async () => {
   root = undefined;
 });
 
-async function renderShell(goalSeeds: GoalSeed[] = []) {
+// Each render starts from a known entry so a fresh mount lands on Home no matter what earlier
+// tests left current; pass an entry to simulate a reload that lands on a sub-screen entry.
+async function renderShell(goalSeeds: GoalSeed[] = [], entry: { kdScreen: string } | null = null) {
+  history.replaceState(null, '');
+  if (entry) history.pushState(entry, '');
   const backend = memoryBackend();
   await backend.open(['food', 'meal', 'goal']);
   for (const g of goalSeeds) {
@@ -162,5 +166,22 @@ describe('kitdemo Shell screen-switch effect', () => {
 
     await click(byLabelPrefix('Foods:'));
     expect(document.activeElement).toBe(container!.querySelector('h1'));
+  });
+});
+
+describe('kitdemo Shell reload (mount reads the entry state)', () => {
+  it('mounts on the entry screen after a reload: one header Back reaches Home', async () => {
+    // renderShell pushes {kdScreen:'foods'} on the base entry before rendering, like a reload.
+    await renderShell([], { kdScreen: 'foods' });
+    expect(heading()).toBe('Foods');
+
+    await click(byLabel('Back'));
+    expect(heading()).toBe('Kitdemo');
+    expect(history.state).toBe(null);
+  });
+
+  it('falls back to Home when the entry carries an unknown kdScreen', async () => {
+    await renderShell([], { kdScreen: 'bogus' });
+    expect(heading()).toBe('Kitdemo');
   });
 });

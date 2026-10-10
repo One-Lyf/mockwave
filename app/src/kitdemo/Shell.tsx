@@ -40,7 +40,12 @@ interface Props {
 
 export default function Shell({ store, session, schema }: Props) {
   const [ready, setReady] = useState<'loading' | 'ok' | string>('loading');
-  const [screen, setScreen] = useState<Screen>('home');
+  // A reload keeps the entry's own screen so the header Back and system Back agree with what
+  // is on screen; an unknown kdScreen falls back to Home.
+  const [screen, setScreen] = useState<Screen>(() => {
+    const s = history.state?.kdScreen;
+    return s === 'foods' || s === 'goal' ? s : 'home';
+  });
   const [sheet, setSheet] = useState<Sheet>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredThemeMode());
