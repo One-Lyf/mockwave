@@ -65,19 +65,22 @@ export default function Shell({ store, session, schema }: Props) {
     return () => document.removeEventListener('keydown', onKey);
   }, [menuOpen]);
 
-  // Browser/system back from a second-level screen returns Home; go() pushes one entry per visit.
+  // Browser/system back and forward land on the entry's own screen; go() pushes one entry per visit.
   useEffect(() => {
-    const onPop = () => {
+    const onPop = (e: PopStateEvent) => {
       setMenuOpen(false);
       setSheet(null);
-      setScreen('home');
+      setScreen(e.state?.kdScreen ?? 'home');
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  // A screen switch starts scrolled to the top with focus on the screen heading.
+  // A screen switch starts scrolled to the top with focus on the screen heading; mounting does not.
+  const lastScreen = useRef(screen);
   useEffect(() => {
+    if (lastScreen.current === screen) return;
+    lastScreen.current = screen;
     bodyRef.current?.scrollTo(0, 0);
     headingRef.current?.focus();
   }, [screen]);
@@ -100,7 +103,10 @@ export default function Shell({ store, session, schema }: Props) {
   const foodsLine = foodsCard(foods);
   const mealRows = kindRows(today);
   const foodChoices = [...foods].sort((a, b) => a.name.localeCompare(b.name)).map((f) => ({ id: f.id, label: `${f.name} (${kcal(f.kcal)})` }));
-  const goalRow = [...goals].sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '')).pop();
+  // The Goal screen shows the goal Home's ring uses: the newest active one, else the newest.
+  const byCreated = (a: { createdAt?: string }, b: { createdAt?: string }) => (a.createdAt ?? '').localeCompare(b.createdAt ?? '');
+  const activeGoals = goals.filter((g) => g.active).sort(byCreated);
+  const goalRow = activeGoals.length ? activeGoals[activeGoals.length - 1] : [...goals].sort(byCreated).pop();
 
   const rows = {
     meal: Object.fromEntries(meals.map((m) => [m.id, m])),
@@ -146,7 +152,7 @@ export default function Shell({ store, session, schema }: Props) {
     <div className="kd">
       <header className="kd-top">
         {screen !== 'home' && (
-          <button type="button" className="kd-iconbtn" aria-label="Back" onClick={() => go('home')}>
+          <button type="button" className="kd-iconbtn" aria-label="Back" onClick={() => (history.state?.kdScreen ? history.back() : setScreen('home'))}>
             <IconBack />
           </button>
         )}
