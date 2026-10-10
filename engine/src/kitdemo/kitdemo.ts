@@ -72,3 +72,61 @@ export function todaySummary(rows: { meals: MealRow[]; foods: FoodRow[]; goals: 
   const goal = active.length ? { kcal: active[active.length - 1].kcal } : null;
   return { byKind, eaten, goal };
 }
+
+/** The Daily Goal card on the home dashboard: ring fraction and the kcal lines around it. */
+export interface GoalRing {
+  /** Ring fill as a 0..1 fraction, clamped; 0 when there is no goal. */
+  pct: number;
+  /** True when a goal of more than 0 kcal is set. */
+  hasGoal: boolean;
+  /** True when eaten meets or beats the goal. */
+  met: boolean;
+  /** kcal left before the goal; 0 once it is met. */
+  left: number;
+  /** kcal past the goal; 0 until it is over. */
+  over: number;
+}
+
+export function goalRing(eaten: number, goal: { kcal: number } | null): GoalRing {
+  const safeEaten = Number.isFinite(eaten) ? Math.max(0, eaten) : 0;
+  const kcal = goal && Number.isFinite(goal.kcal) && goal.kcal > 0 ? goal.kcal : null;
+  if (kcal === null) return { pct: 0, hasGoal: false, met: false, left: 0, over: 0 };
+  return {
+    pct: Math.min(1, safeEaten / kcal),
+    hasGoal: true,
+    met: safeEaten >= kcal,
+    left: Math.max(0, kcal - safeEaten),
+    over: safeEaten > kcal ? safeEaten - kcal : 0,
+  };
+}
+
+/** The Foods card on the home dashboard: a count line with the names under it. */
+export interface FoodsCard {
+  count: number;
+  /** "4 Foods", "1 Food", or "No Foods Yet" when empty. */
+  heading: string;
+  /** Comma-joined names in screen order; empty when there are none. */
+  names: string;
+  empty: boolean;
+}
+
+export function foodsCard(foods: { name: string }[]): FoodsCard {
+  const sorted = [...foods].sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    count: sorted.length,
+    heading: sorted.length === 0 ? 'No Foods Yet' : `${sorted.length} Food${sorted.length === 1 ? '' : 's'}`,
+    names: sorted.map((f) => f.name).join(', '),
+    empty: sorted.length === 0,
+  };
+}
+
+/** One row per meal kind for the Today's Meals card; empty marks a "Nothing Yet" row. */
+export interface KindRow {
+  kind: Kind;
+  meals: TodayMeal[];
+  empty: boolean;
+}
+
+export function kindRows(summary: TodaySummary): KindRow[] {
+  return KINDS.map((kind) => ({ kind, meals: summary.byKind[kind], empty: summary.byKind[kind].length === 0 }));
+}

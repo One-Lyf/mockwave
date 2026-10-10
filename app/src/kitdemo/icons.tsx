@@ -9,3 +9,5 @@ export const IconFood = () => svg(<path d="M6 3v8a3 3 0 0 0 3 3v7M9 3v6M12 3v8a3
 export const IconGoal = () => svg(<><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="12" r=".8" /></>);
 export const IconPlus = () => svg(<path d="M12 5v14M5 12h14" />);
 export const IconChevron = () => svg(<path d="M9 6l6 6-6 6" />);
+export const IconBack = () => svg(<path d="M15 6l-6 6 6 6" />);
+export const IconMore = () => svg(<><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>);

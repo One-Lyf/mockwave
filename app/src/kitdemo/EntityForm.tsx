@@ -103,7 +103,7 @@ export default function EntityForm({ entity, heading, saveLabel, row, defaults, 
                     />
                   )}
                   {field.type === 'ref' && !(choices[field.name] ?? []).length && (
-                    <p className="kd-hint">No {title(label(field.to!))}s Yet. Add One In The {title(label(field.to!))}s Tab.</p>
+                    <p className="kd-hint">No {title(label(field.to!))}s Yet. Add One On The {title(label(field.to!))}s Screen.</p>
                   )}
                 </>
               )}
