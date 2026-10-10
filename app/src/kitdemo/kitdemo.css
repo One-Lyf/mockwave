@@ -23,7 +23,7 @@
 .kd-card > .kd-cardhead + .kd-row { border-top: 0; }
 .kd-main { flex: 1; min-width: 0; }
 .kd-t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kd-s { font-size: 12px; color: var(--ink-2); }
+.kd-s { font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kd-kcal { font-variant-numeric: tabular-nums; color: var(--ink-2); font-size: 13px; white-space: nowrap; }
 .kd-kind { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); width: 74px; flex: none; }
 .kd-empty { color: var(--ink-3); font-size: 13px; padding: 6px 0; }
@@ -44,7 +44,7 @@
 
 .kd-ring { position: relative; width: 92px; height: 92px; flex: none; }
 .kd .kd-ring svg { width: 92px; height: 92px; display: block; }
-.kd .kd-ring circle { fill: none; stroke-width: 8; }
+.kd .kd-ring circle { fill: none; stroke-width: 8; stroke-linecap: butt; }
 .kd-ring-track { stroke: var(--surface-3); }
 .kd-ring-bar { stroke: var(--accent); }
 .kd-ring b { position: absolute; inset: 10px; border-radius: 50%; background: var(--surface-1); display: grid; place-items: center; font-size: 15px; text-align: center; line-height: 1.15; }

@@ -1,10 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   chipLabel, foodsCard, goalRing, kindRows, localDate, todaySummary,
   type KitSchema, type KitStore, type KitdemoSession, type Row,
 } from '../../../engine/src';
 import { getStoredThemeMode, setThemeMode, type ThemeMode } from '../theme';
 import EntityForm from './EntityForm';
+import Ring from './Ring';
 import { IconBack, IconChevron, IconMore, IconPlus } from './icons';
 import './kitdemo.css';
 
@@ -29,10 +30,6 @@ function useStoreVersion(store: KitStore) {
   );
 }
 
-/** Progress ring geometry: the bar is a circle of radius 42 in a 96x96 viewBox. */
-const RING_R = 42;
-const RING_C = 2 * Math.PI * RING_R;
-
 const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
 
 interface Props {
@@ -49,6 +46,8 @@ export default function Shell({ store, session, schema }: Props) {
   const [theme, setTheme] = useState<ThemeMode>(() => getStoredThemeMode());
   const [attempt, setAttempt] = useState(0);
   useStoreVersion(store);
+  const bodyRef = useRef<HTMLElement | null>(null);
+  const headingRef = useRef<HTMLHeadingElement | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -66,9 +65,30 @@ export default function Shell({ store, session, schema }: Props) {
     return () => document.removeEventListener('keydown', onKey);
   }, [menuOpen]);
 
+  // Browser/system back from a second-level screen returns Home; go() pushes one entry per visit.
+  useEffect(() => {
+    const onPop = () => {
+      setMenuOpen(false);
+      setSheet(null);
+      setScreen('home');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  // A screen switch starts scrolled to the top with focus on the screen heading.
+  useEffect(() => {
+    bodyRef.current?.scrollTo(0, 0);
+    headingRef.current?.focus();
+  }, [screen]);
+
   const entity = (name: string) => schema.entities.find((e) => e.name === name)!;
   const close = () => setSheet(null);
-  const go = (next: Screen) => { setMenuOpen(false); setScreen(next); };
+  const go = (next: Screen) => {
+    setMenuOpen(false);
+    setScreen(next);
+    if (next !== 'home') window.history.pushState({ kdScreen: next }, '');
+  };
   const openSheet = (next: Sheet) => { setMenuOpen(false); setSheet(next); };
 
   const loaded = ready === 'ok';
@@ -94,7 +114,7 @@ export default function Shell({ store, session, schema }: Props) {
       : ring.over > 0
         ? `${num(ring.over)} kcal Over`
         : 'Goal Met';
-  const goalStatus = ring.hasGoal ? 'Goal Active' : 'No Goal';
+  const goalStatus = ring.hasGoal ? 'Goal Active' : goalRow && !goalRow.active ? 'Paused' : 'No Goal';
 
   function renderSheet() {
     if (!sheet) return null;
@@ -130,7 +150,7 @@ export default function Shell({ store, session, schema }: Props) {
             <IconBack />
           </button>
         )}
-        <h1>{screen === 'home' ? 'Kitdemo' : title(screen)}</h1>
+        <h1 ref={headingRef} tabIndex={-1}>{screen === 'home' ? 'Kitdemo' : title(screen)}</h1>
         <span className="kd-chip"><i />{chipLabel(session)}</span>
         <button
           type="button"
@@ -164,7 +184,7 @@ export default function Shell({ store, session, schema }: Props) {
         </>
       )}
 
-      <main className="kd-body">
+      <main className="kd-body" ref={bodyRef}>
         {ready === 'loading' && <p className="kd-empty" role="status">Loading</p>}
         {ready !== 'loading' && !loaded && (
           <div className="kd-card" role="alert">
@@ -183,19 +203,9 @@ export default function Shell({ store, session, schema }: Props) {
                 aria-label={`Daily Goal: ${goalLine}, ${goalStatus}`}
                 onClick={() => go('goal')}
               >
-                <div className="kd-ring" aria-hidden="true">
-                  <svg viewBox="0 0 96 96">
-                    <circle className="kd-ring-track" cx="48" cy="48" r={RING_R} />
-                    <circle
-                      className="kd-ring-bar"
-                      cx="48" cy="48"
-                      r={RING_R}
-                      strokeDasharray={`${RING_C * ring.pct} ${RING_C}`}
-                      transform="rotate(-90 48 48)"
-                    />
-                  </svg>
-                  <b><span>{num(today.eaten)}<small>{ring.hasGoal ? `of ${num(today.goal!.kcal)}` : 'eaten'}</small></span></b>
-                </div>
+                <Ring pct={ring.pct}>
+                  <span>{num(today.eaten)}<small>{ring.hasGoal ? `of ${num(today.goal!.kcal)}` : 'eaten'}</small></span>
+                </Ring>
                 <div className="kd-goaltxt">
                   <span className="kd-label">Daily Goal</span>
                   <div className="kd-big">{goalLine}</div>
