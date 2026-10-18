@@ -74,7 +74,7 @@ function toCode(imp: SchemaImport, data: unknown): string {
   return `${json}\n`;
 }
 
-export default function App() {
+export default function App({ embedded = false }: { embedded?: boolean }) {
   const [schemaInput, setSchemaInput] = useState<string>('');
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -141,9 +141,11 @@ export default function App() {
   return (
     <div className="mockwave-app">
       <header className="mockwave-header">
-        <div className="header-bar">
-          <ThemeToggle />
-        </div>
+        {!embedded && (
+          <div className="header-bar">
+            <ThemeToggle />
+          </div>
+        )}
         <h1>Mockwave</h1>
         <p className="tagline">Generate Realistic Mock Data With Copy-As-Code</p>
       </header>
