@@ -8,5 +8,7 @@ import App from './App';
 import './index.css';
 
 export default function RemoteApp() {
-  return <App />;
+  // The shell owns [data-theme]. Hide the in-app control so a click cannot
+  // write that attribute over the host.
+  return <App embedded />;
 }

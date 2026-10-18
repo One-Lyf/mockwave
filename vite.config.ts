@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 // This app's own deployed origin. The OneLyf shell loads remoteEntry.js and
 // this app's chunks inside the shell's page. Without an absolute `base`, Vite
 // emits relative asset URLs that resolve against the shell's origin and 404.
-// Production pins `base` to the canonical path; preview deploys pin their own
-// Vercel URL so a preview does not cross-load production assets. Dev stays on
-// `/` so the local server works standalone. Same split as Rackwave.
+// Production pins `base` to the Vercel project that actually serves Mockwave
+// (https://mockwave.vercel.app/). onelyf.net/mockwave is not rewritten, so a
+// base there returns the shell's HTML for every asset. Preview deploys pin
+// their own Vercel URL so a preview does not cross-load production assets.
+// Dev stays on `/` so the local server works standalone.
 const DEPLOYED_ORIGIN =
   process.env.VERCEL_ENV === 'preview' && process.env.VERCEL_URL
     ? `https://${process.env.VERCEL_URL}/`
-    : 'https://onelyf.net/mockwave/';
+    : 'https://mockwave.vercel.app/';
 
 export default defineConfig(({ mode }) => ({
   base: mode === 'production' ? DEPLOYED_ORIGIN : '/',
