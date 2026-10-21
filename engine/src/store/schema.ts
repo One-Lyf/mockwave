@@ -52,6 +52,8 @@ export const SYSTEM_FIELDS = ['id', 'ownerId', 'createdAt', 'updatedAt', 'delete
 const NAME = /^[a-z][a-zA-Z0-9]*$/;
 const GENERATED_VERBS = ['create', 'update', 'delete'];
 const FIELD_TYPES: FieldType[] = ['string', 'number', 'boolean', 'date', 'enum', 'ref'];
+/** Keys a declared action may carry. Anything else is a typo (for example `sensitiv`). */
+const ACTION_KEYS = ['name', 'label', 'description', 'sensitive', 'set'];
 
 export interface SchemaCheckOptions {
   /** True when the app has a SignIn block with a provider other than none. */
@@ -89,6 +91,13 @@ export function validateSchema(schema: KitSchema, opts: SchemaCheckOptions = {})
       else if (GENERATED_VERBS.includes(a.name)) errors.push(`${at}: clashes with the generated ${a.name} action`);
       if (verbs.has(a.name)) errors.push(`${at}: duplicate name`);
       verbs.add(a.name);
+      if (typeof a.label !== 'string' || a.label.trim() === '') errors.push(`${at}: label is required`);
+      if (a.sensitive !== undefined && typeof a.sensitive !== 'boolean') {
+        errors.push(`${at}: sensitive must be true or false`);
+      }
+      for (const k of Object.keys(a)) {
+        if (!ACTION_KEYS.includes(k)) errors.push(`${at}: unknown key "${k}"`);
+      }
       const keys = Object.keys(a.set ?? {});
       if (!keys.length) errors.push(`${at}: set needs at least one field`);
       for (const k of keys) {
