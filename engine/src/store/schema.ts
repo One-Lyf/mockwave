@@ -16,6 +16,21 @@ export interface FieldDef {
   optional?: boolean;
 }
 
+/**
+ * An action an entity declares beyond create, update and delete (SPEC-presets-and-kit 4.3, "each
+ * entity's declared actions"). It takes `{id}` and writes the fixed `set` values onto that row, so
+ * a button like "Mark Done" needs no code. Its surface name is `<entity>.<name>`.
+ */
+export interface DeclaredAction {
+  name: string;
+  label: string;
+  description?: string;
+  /** Marks the action for a confirm step before it runs (the surface's `sensitive` flag). */
+  sensitive?: boolean;
+  /** Field values written to the row; each is checked against the entity's fields. */
+  set: Record<string, unknown>;
+}
+
 export interface EntityDef {
   /** Also the entity's data path and action prefix (`meal`, `meal.create`). */
   name: string;
@@ -24,6 +39,7 @@ export interface EntityDef {
   scope: 'user' | 'household';
   /** Delete marks the row (`deletedAt`) instead of removing it. */
   softDelete?: boolean;
+  actions?: DeclaredAction[];
 }
 
 export interface KitSchema {
@@ -34,6 +50,7 @@ export interface KitSchema {
 export const SYSTEM_FIELDS = ['id', 'ownerId', 'createdAt', 'updatedAt', 'deletedAt'] as const;
 
 const NAME = /^[a-z][a-zA-Z0-9]*$/;
+const GENERATED_VERBS = ['create', 'update', 'delete'];
 const FIELD_TYPES: FieldType[] = ['string', 'number', 'boolean', 'date', 'enum', 'ref'];
 
 export interface SchemaCheckOptions {
@@ -64,6 +81,26 @@ export function validateSchema(schema: KitSchema, opts: SchemaCheckOptions = {})
       if (!FIELD_TYPES.includes(f.type)) errors.push(`${at}: unknown type "${f.type}"`);
       if (f.type === 'enum' && !f.enum?.length) errors.push(`${at}: enum needs values`);
       if (f.type === 'ref' && !(f.to && names.has(f.to))) errors.push(`${at}: ref to unknown entity "${f.to}"`);
+    }
+    const verbs = new Set<string>();
+    for (const a of e.actions ?? []) {
+      const at = `entity "${e.name}" action "${a.name}"`;
+      if (!NAME.test(a.name)) errors.push(`${at}: name must match ${NAME}`);
+      else if (GENERATED_VERBS.includes(a.name)) errors.push(`${at}: clashes with the generated ${a.name} action`);
+      if (verbs.has(a.name)) errors.push(`${at}: duplicate name`);
+      verbs.add(a.name);
+      const keys = Object.keys(a.set ?? {});
+      if (!keys.length) errors.push(`${at}: set needs at least one field`);
+      for (const k of keys) {
+        const f = e.fields.find((x) => x.name === k);
+        if (!f) errors.push(`${at}: set names unknown field "${k}"`);
+        else if (f.type === 'ref') errors.push(`${at}: set cannot write ref field "${k}"`);
+        else {
+          const v = a.set[k];
+          const err = v === null && f.optional ? null : checkValue(f, v);
+          if (err) errors.push(`${at}: set "${k}" ${err}`);
+        }
+      }
     }
   }
   return errors;

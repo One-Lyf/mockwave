@@ -144,3 +144,69 @@ describe('generated surfaces', () => {
     await expect(store.dispatch('create', {})).rejects.toThrow('unknown action "create"');
   });
 });
+
+describe('declared actions', () => {
+  const withActions: KitSchema = {
+    entities: [
+      {
+        name: 'goal',
+        scope: 'user',
+        softDelete: true,
+        fields: [{ name: 'kcal', type: 'number' }, { name: 'active', type: 'boolean' }, { name: 'note', type: 'string', optional: true }],
+        actions: [
+          { name: 'retire', label: 'Retire Goal', description: 'Stops counting toward today', sensitive: true, set: { active: false } },
+          { name: 'clearNote', label: 'Clear Note', set: { note: null } },
+        ],
+      },
+    ],
+  };
+  const open = async () => {
+    const store = createStore(withActions, { backend: memoryBackend(), newId: () => 'g1' });
+    await store.load();
+    return store;
+  };
+
+  it('adds them to the action surface after the generated ones, carrying sensitive', async () => {
+    const store = await open();
+    expect(store.actionSurface()).toEqual([
+      { name: 'goal.create', label: 'Add Goal' },
+      { name: 'goal.update', label: 'Edit Goal' },
+      { name: 'goal.delete', label: 'Delete Goal' },
+      { name: 'goal.retire', label: 'Retire Goal', description: 'Stops counting toward today', sensitive: true },
+      { name: 'goal.clearNote', label: 'Clear Note' },
+    ]);
+  });
+
+  it('writes the fixed values onto the row named by id, and notifies', async () => {
+    const store = await open();
+    await store.dispatch('goal.create', { kcal: 2000, active: true, note: 'x' });
+    const listener = vi.fn();
+    store.subscribe(listener);
+    await store.dispatch('goal.retire', { id: 'g1' });
+    await store.dispatch('goal.clearNote', { id: 'g1' });
+    expect(store.get('goal', 'g1')).toMatchObject({ kcal: 2000, active: false, note: null });
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails on a missing or deleted row, and on an undeclared action', async () => {
+    const store = await open();
+    await expect(store.dispatch('goal.retire', { id: 'nope' })).rejects.toThrow('no row "nope"');
+    await expect(store.dispatch('goal.retire', {})).rejects.toThrow('no row');
+    await store.dispatch('goal.create', { kcal: 1, active: true });
+    await store.dispatch('goal.delete', { id: 'g1' });
+    await expect(store.dispatch('goal.retire', { id: 'g1' })).rejects.toThrow('no row');
+    await expect(store.dispatch('goal.explode', { id: 'g1' })).rejects.toThrow('unknown action');
+  });
+
+  it('rejects bad declarations when the schema is checked', () => {
+    const bad = (actions: NonNullable<KitSchema['entities'][0]['actions']>) =>
+      validateSchema({ entities: [{ ...withActions.entities[0], actions }] });
+    expect(bad([{ name: 'create', label: 'x', set: { active: true } }])[0]).toContain('clashes');
+    expect(bad([{ name: 'a', label: 'x', set: {} }])[0]).toContain('at least one field');
+    expect(bad([{ name: 'a', label: 'x', set: { nope: 1 } }])[0]).toContain('unknown field');
+    expect(bad([{ name: 'a', label: 'x', set: { kcal: 'high' } }])[0]).toContain('finite number');
+    expect(bad([{ name: 'a', label: 'x', set: { kcal: null } }])[0]).toContain('finite number');
+    expect(bad([{ name: 'a', label: 'x', set: { active: true } }, { name: 'a', label: 'y', set: { active: false } }])[0]).toContain('duplicate');
+    expect(() => createStore({ entities: [{ ...withActions.entities[0], actions: [{ name: 'create', label: 'x', set: { active: true } }] }] }, { backend: memoryBackend() })).toThrow('invalid schema');
+  });
+});
