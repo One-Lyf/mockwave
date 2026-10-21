@@ -4,7 +4,8 @@
  * and generates the data and action surfaces a Tier 0 app binds to (SPEC-presets-and-kit 4.0).
  *
  * Surface naming: entity `meal` gives data path `meal` (an array of live rows) and actions
- * `meal.create`, `meal.update`, `meal.delete`.
+ * `meal.create`, `meal.update`, `meal.delete`, plus each action the entity declares
+ * (`meal.markDone`, which writes its fixed `set` values onto the row named by `{id}`).
  */
 
 import type { Row, StoreBackend } from './backend';
@@ -23,6 +24,8 @@ export interface SurfaceAction {
   name: string;
   label: string;
   description?: string;
+  /** A declared action that asks for a confirm step before it runs. */
+  sensitive?: boolean;
 }
 
 export interface StoreOptions {
@@ -171,6 +174,12 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
         { name: `${e.name}.create`, label: `Add ${label(e.name)}` },
         { name: `${e.name}.update`, label: `Edit ${label(e.name)}` },
         { name: `${e.name}.delete`, label: `Delete ${label(e.name)}` },
+        ...(e.actions ?? []).map((a) => ({
+          name: `${e.name}.${a.name}`,
+          label: a.label,
+          ...(a.description ? { description: a.description } : {}),
+          ...(a.sensitive ? { sensitive: true } : {}),
+        })),
       ]);
     },
 
@@ -193,8 +202,11 @@ export function createStore(schema: KitSchema, opts: StoreOptions): KitStore {
           return store.update(entity, String(id), rest);
         case 'delete':
           return store.delete(entity, String(id));
-        default:
-          throw new StoreError(`unknown action "${action}"`);
+        default: {
+          const declared = entities.get(entity)?.actions?.find((a) => a.name === verb);
+          if (!declared) throw new StoreError(`unknown action "${action}"`);
+          return store.update(entity, String(id), declared.set);
+        }
       }
     },
 
