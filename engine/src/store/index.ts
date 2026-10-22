@@ -4,3 +4,4 @@ export * from './store';
 export { deviceBackend } from './deviceBackend';
 export { stackBackend, type StackBackendOptions } from './stackBackend';
 export { schemaToSql } from './sql';
+export * from '../blocks/referenceTable';
