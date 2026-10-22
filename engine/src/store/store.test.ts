@@ -209,4 +209,35 @@ describe('declared actions', () => {
     expect(bad([{ name: 'a', label: 'x', set: { active: true } }, { name: 'a', label: 'y', set: { active: false } }])[0]).toContain('duplicate');
     expect(() => createStore({ entities: [{ ...withActions.entities[0], actions: [{ name: 'create', label: 'x', set: { active: true } }] }] }, { backend: memoryBackend() })).toThrow('invalid schema');
   });
+
+  it('refuses a missing label, a non-boolean sensitive, and unknown keys', () => {
+    const check = (action: object) =>
+      validateSchema({
+        entities: [{ ...withActions.entities[0], actions: [action as NonNullable<KitSchema['entities'][0]['actions']>[0]] }],
+      });
+    const at = 'entity "goal" action "retire"';
+    expect(check({ name: 'retire', set: { active: false } })).toEqual([`${at}: label is required`]);
+    expect(check({ name: 'retire', label: '  ', set: { active: false } })).toEqual([`${at}: label is required`]);
+    // 'no' is truthy, so without this check the surface would mark the action sensitive.
+    expect(check({ name: 'retire', label: 'Retire', sensitive: 'no', set: { active: false } })).toEqual([
+      `${at}: sensitive must be true or false`,
+    ]);
+    expect(check({ name: 'retire', label: 'Retire', sensitiv: true, set: { active: false } })).toEqual([
+      `${at}: unknown key "sensitiv"`,
+    ]);
+    expect(check({ name: 'retire', label: 'Retire', sensitive: false, set: { active: false } })).toEqual([]);
+    expect(() =>
+      createStore(
+        {
+          entities: [
+            {
+              ...withActions.entities[0],
+              actions: [{ name: 'retire', label: 'Retire', sensitiv: true, set: { active: false } } as NonNullable<KitSchema['entities'][0]['actions']>[0]],
+            },
+          ],
+        },
+        { backend: memoryBackend() },
+      ),
+    ).toThrow('unknown key "sensitiv"');
+  });
 });
