@@ -4,10 +4,12 @@
  * `sectionHeader`, when set, names an optional string field: a row whose value is non-blank opens
  * a section and is not itself an item. Rows before the first header sit in a leading group.
  * A header row may omit other required fields. This block does not store rows.
+ * The rows live in a KitStore entity: `childListEntity` gives that entity, and rows read back
+ * from the store (with `id`, `createdAt` and the other store columns) check and order as-is.
  */
 
-import { checkValue, type FieldDef } from '../store/schema';
-import { checkFieldList, FIELD_NAME } from './fields';
+import { checkValue, type EntityDef, type FieldDef } from '../store/schema';
+import { checkFieldList, FIELD_NAME, isSystemField } from './fields';
 
 export interface ChildList {
   parent: string;
@@ -71,7 +73,7 @@ export function checkChildList(list: ChildList, rows?: ChildRow[]): string[] {
       return;
     }
     for (const key of Object.keys(row)) {
-      if (!fields.names.has(key)) errors.push(`${at}: "${key}" is not a declared field`);
+      if (!fields.names.has(key) && !isSystemField(key)) errors.push(`${at}: "${key}" is not a declared field`);
     }
     const header = isHeader(row, headerField);
     for (const f of schema) {
@@ -129,4 +131,18 @@ export function groupChildren(list: ChildList, rows: ChildRow[]): ChildGroup[] |
     current.items.push(row);
   }
   return groups;
+}
+
+/**
+ * The KitStore entity that holds this list's rows: the list's fields as its fields. Add it to the
+ * app's `KitSchema.entities`, then pass `store.list(name)` to `orderChildren` or `groupChildren`.
+ * Null when the list fails its check. A ref field to `parent` is checked by `createStore`.
+ */
+export function childListEntity(
+  name: string,
+  list: ChildList,
+  scope: EntityDef['scope'] = 'user',
+): EntityDef | null {
+  if (checkChildList(list).length) return null;
+  return { name, scope, fields: structuredClone(list.fields) };
 }

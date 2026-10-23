@@ -54,3 +54,11 @@ export function checkFieldList(fields: FieldDef[] | undefined): CheckedFields {
   }
   return { errors, names, usable };
 }
+
+/**
+ * True for a column the kit store owns on every row (`id`, `createdAt`, and so on). A row read
+ * from a KitStore entity carries these, so a block reading store rows does not call them undeclared.
+ */
+export function isSystemField(key: string): boolean {
+  return (SYSTEM_FIELDS as readonly string[]).includes(key);
+}

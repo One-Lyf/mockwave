@@ -3,10 +3,12 @@
  * Items are grouped by the calendar date written on their one date field. A time or a zone
  * on that string does not move the bucket: `2024-01-15T23:00:00.000Z` stays in 2024-01-15.
  * This block does not store rows. It checks them and returns a copy grouped by period.
+ * The rows live in a KitStore entity: `periodBucketEntity` gives that entity, and rows read back
+ * from the store (with `id`, `createdAt` and the other store columns) check and group as-is.
  */
 
-import { checkValue, type FieldDef } from '../store/schema';
-import { checkFieldList } from './fields';
+import { checkValue, type EntityDef, type FieldDef } from '../store/schema';
+import { checkFieldList, isSystemField } from './fields';
 
 export type Period = 'day' | 'month';
 
@@ -62,7 +64,7 @@ export function checkPeriodBucket(bucket: PeriodBucket, items?: PeriodItem[]): s
       return;
     }
     for (const key of Object.keys(item)) {
-      if (!fields.names.has(key)) errors.push(`${at}: "${key}" is not a declared field`);
+      if (!fields.names.has(key) && !isSystemField(key)) errors.push(`${at}: "${key}" is not a declared field`);
     }
     for (const f of schema) {
       if (!f || typeof f !== 'object') continue;
@@ -103,4 +105,18 @@ export function groupPeriodBucket(bucket: PeriodBucket, items: PeriodItem[]): Pe
     else groups.set(key, [copy]);
   }
   return [...groups.keys()].sort().map((period) => ({ period, items: groups.get(period)! }));
+}
+
+/**
+ * The KitStore entity that holds this bucket's items: the item schema as its fields. Add it to the
+ * app's `KitSchema.entities`, then pass `store.list(name)` to `groupPeriodBucket`.
+ * Null when the bucket fails its check. `household` needs sign-in, which `createStore` enforces.
+ */
+export function periodBucketEntity(
+  name: string,
+  bucket: PeriodBucket,
+  scope: EntityDef['scope'] = 'user',
+): EntityDef | null {
+  if (checkPeriodBucket(bucket).length) return null;
+  return { name, scope, fields: structuredClone(bucket.itemSchema) };
 }
