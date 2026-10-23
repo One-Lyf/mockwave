@@ -5,3 +5,6 @@ export { deviceBackend } from './deviceBackend';
 export { stackBackend, type StackBackendOptions } from './stackBackend';
 export { schemaToSql } from './sql';
 export * from '../blocks/referenceTable';
+export * from '../blocks/periodBucket';
+export * from '../blocks/settings';
+export * from '../blocks/childList';
