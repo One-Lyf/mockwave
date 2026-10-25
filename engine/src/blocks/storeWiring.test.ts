@@ -127,6 +127,26 @@ describe('ChildList in a KitStore entity', () => {
     expect(orderChildren(list, rows)).toBeNull();
   });
 
+  it('a bad row under one parent does not blank another parent\'s list', async () => {
+    const entity = childListEntity('stop', list)!;
+    const store = createStore({ entities: [{ name: 'trip', scope: 'user', fields: [] }, entity] }, opts());
+    await store.load();
+    const a = (await store.dispatch('trip.create', {})) as { id: string };
+    const b = (await store.dispatch('trip.create', {})) as { id: string };
+    await store.dispatch('stop.create', { trip: a.id, label: 'A-stop', position: 0 });
+    // The relaxed entity stores an item row under B with no label.
+    await store.dispatch('stop.create', { trip: b.id, position: 0 });
+    const rows = store.list('stop');
+    expect(rows).toHaveLength(2);
+    expect(orderChildren(list, rows, a.id)!.map((r) => r.label)).toEqual(['A-stop']);
+    expect(groupChildren(list, rows, a.id)!.map((g) => [g.header, g.items.map((r) => r.label)])).toEqual([
+      [null, ['A-stop']],
+    ]);
+    // B's own list still fails its check, and so does the unfiltered set.
+    expect(groupChildren(list, rows, b.id)).toBeNull();
+    expect(orderChildren(list, rows)).toBeNull();
+  });
+
   it('the store refuses a child whose parent is missing, and a bad list has no entity', async () => {
     const store = createStore({ entities: [{ name: 'trip', scope: 'user', fields: [] }, childListEntity('stop', list)!] }, opts());
     await store.load();

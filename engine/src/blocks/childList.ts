@@ -106,13 +106,19 @@ export function checkChildList(list: ChildList, rows?: ChildRow[]): string[] {
 }
 
 function sortedCopy(list: ChildList, rows: ChildRow[], parentId?: string): ChildRow[] | null {
-  if (checkChildList(list, rows).length) return null;
+  if (checkChildList(list).length || !Array.isArray(rows)) return null;
   const refs = parentRefFields(list);
   let mine = rows;
   if (parentId !== undefined) {
     if (typeof parentId !== 'string' || !refs.length) return null;
-    mine = rows.filter((row) => refs.some((r) => row[r] === parentId));
-  } else if (refs.length) {
+    // Filter first, then check only this parent's rows, so a bad row under another parent
+    // does not blank this one.
+    mine = rows.filter(
+      (row) => !!row && typeof row === 'object' && !Array.isArray(row) && refs.some((r) => row[r] === parentId),
+    );
+  }
+  if (checkChildList(list, mine).length) return null;
+  if (parentId === undefined && refs.length) {
     // Rows of two parents would interleave by position. Refuse instead of mixing them.
     const parents = new Set(rows.map((row) => refs.map((r) => String(row[r] ?? '')).join('\u0000')));
     if (parents.size > 1) return null;
@@ -126,7 +132,8 @@ function sortedCopy(list: ChildList, rows: ChildRow[], parentId?: string): Child
 /**
  * A copy of the rows sorted by position. Ties keep input order. Null when the check fails.
  * With `parentId`, only rows whose ref field to `parent` equals it (null when the list has no such
- * field). Without it, null when the rows belong to more than one parent.
+ * field), and only those rows are checked, so a bad row under another parent is skipped.
+ * Without it, every row is checked, and null when the rows belong to more than one parent.
  */
 export function orderChildren(list: ChildList, rows: ChildRow[], parentId?: string): ChildRow[] | null {
   return sortedCopy(list, rows, parentId);
