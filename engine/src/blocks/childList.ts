@@ -3,9 +3,12 @@
  * Ordered children of a parent entity. `position` is the required number field that sorts them.
  * `sectionHeader`, when set, names an optional string field: a row whose value is non-blank opens
  * a section and is not itself an item. Rows before the first header sit in a leading group.
- * A header row may omit other required fields. This block does not store rows.
+ * A header row may omit other required fields, except `position` and a ref field to `parent`.
+ * This block does not store rows.
  * The rows live in a KitStore entity: `childListEntity` gives that entity, and rows read back
  * from the store (with `id`, `createdAt` and the other store columns) check and order as-is.
+ * One entity holds the children of every parent. Pass the parent id to `orderChildren` or
+ * `groupChildren` so one parent's rows never mix with another's.
  */
 
 import { checkValue, type EntityDef, type FieldDef } from '../store/schema';
@@ -25,6 +28,14 @@ export type ChildRow = Record<string, unknown>;
 export interface ChildGroup {
   header: string | null;
   items: ChildRow[];
+}
+
+/** Names of the fields that ref the parent entity. */
+function parentRefFields(list: ChildList): string[] {
+  if (!Array.isArray(list?.fields)) return [];
+  return list.fields
+    .filter((f) => !!f && typeof f === 'object' && f.type === 'ref' && f.to === list.parent && typeof f.name === 'string')
+    .map((f) => f.name);
 }
 
 function isHeader(row: ChildRow, field: string | undefined): boolean {
@@ -66,6 +77,7 @@ export function checkChildList(list: ChildList, rows?: ChildRow[]): string[] {
   const headerDef = typeof headerName === 'string' ? fields.usable.get(headerName) : undefined;
   const headerField = headerDef?.type === 'string' && headerDef.optional ? headerName : undefined;
   const schema = Array.isArray(list?.fields) ? list.fields : [];
+  const parentRefs = new Set(parentRefFields(list));
   rows.forEach((row, i) => {
     const at = `row ${i}`;
     if (row === null || typeof row !== 'object' || Array.isArray(row)) {
@@ -80,7 +92,7 @@ export function checkChildList(list: ChildList, rows?: ChildRow[]): string[] {
       if (!f || typeof f !== 'object') continue;
       const v = row[f.name];
       if (v === undefined) {
-        if (!f.optional && (!header || f.name === position)) errors.push(`${at}: missing required field "${f.name}"`);
+        if (!f.optional && (!header || f.name === position || parentRefs.has(f.name))) errors.push(`${at}: missing required field "${f.name}"`);
         continue;
       }
       const def = fields.usable.get(f.name);
@@ -93,26 +105,41 @@ export function checkChildList(list: ChildList, rows?: ChildRow[]): string[] {
   return errors;
 }
 
-function sortedCopy(list: ChildList, rows: ChildRow[]): ChildRow[] | null {
+function sortedCopy(list: ChildList, rows: ChildRow[], parentId?: string): ChildRow[] | null {
   if (checkChildList(list, rows).length) return null;
-  return rows
+  const refs = parentRefFields(list);
+  let mine = rows;
+  if (parentId !== undefined) {
+    if (typeof parentId !== 'string' || !refs.length) return null;
+    mine = rows.filter((row) => refs.some((r) => row[r] === parentId));
+  } else if (refs.length) {
+    // Rows of two parents would interleave by position. Refuse instead of mixing them.
+    const parents = new Set(rows.map((row) => refs.map((r) => String(row[r] ?? '')).join('\u0000')));
+    if (parents.size > 1) return null;
+  }
+  return mine
     .map((row, index) => ({ row: structuredClone(row), index }))
     .sort((a, b) => (a.row[list.position] as number) - (b.row[list.position] as number) || a.index - b.index)
     .map((x) => x.row);
 }
 
-/** A copy of the rows sorted by position. Ties keep input order. Null when the check fails. */
-export function orderChildren(list: ChildList, rows: ChildRow[]): ChildRow[] | null {
-  return sortedCopy(list, rows);
+/**
+ * A copy of the rows sorted by position. Ties keep input order. Null when the check fails.
+ * With `parentId`, only rows whose ref field to `parent` equals it (null when the list has no such
+ * field). Without it, null when the rows belong to more than one parent.
+ */
+export function orderChildren(list: ChildList, rows: ChildRow[], parentId?: string): ChildRow[] | null {
+  return sortedCopy(list, rows, parentId);
 }
 
 /**
  * The ordered rows split into sections. A header row opens a section and is not an item.
  * With no `sectionHeader`, every row is one group under a null header.
+ * `parentId` filters as in `orderChildren`; rows of two parents are never grouped together.
  * Null when the check fails. Changing a returned row does not change `rows`.
  */
-export function groupChildren(list: ChildList, rows: ChildRow[]): ChildGroup[] | null {
-  const ordered = sortedCopy(list, rows);
+export function groupChildren(list: ChildList, rows: ChildRow[], parentId?: string): ChildGroup[] | null {
+  const ordered = sortedCopy(list, rows, parentId);
   if (!ordered) return null;
   const headerField = list.sectionHeader || undefined;
   if (!headerField) return [{ header: null, items: ordered }];
@@ -134,8 +161,11 @@ export function groupChildren(list: ChildList, rows: ChildRow[]): ChildGroup[] |
 }
 
 /**
- * The KitStore entity that holds this list's rows: the list's fields as its fields. Add it to the
- * app's `KitSchema.entities`, then pass `store.list(name)` to `orderChildren` or `groupChildren`.
+ * The KitStore entity that holds this list's rows: the list's fields as its fields, with every
+ * field optional except `position` and the ref fields to `parent`, so a header row that omits the
+ * rest stores (the way `settingsEntity` loosens its fields). `checkChildList` still requires the
+ * other fields on item rows when they are read back. Add it to the app's `KitSchema.entities`,
+ * then pass `store.list(name)` and the parent id to `orderChildren` or `groupChildren`.
  * Null when the list fails its check. A ref field to `parent` is checked by `createStore`.
  */
 export function childListEntity(
@@ -144,5 +174,7 @@ export function childListEntity(
   scope: EntityDef['scope'] = 'user',
 ): EntityDef | null {
   if (checkChildList(list).length) return null;
-  return { name, scope, fields: structuredClone(list.fields) };
+  const keep = new Set([list.position, ...parentRefFields(list)]);
+  const fields = list.fields.map((f) => (keep.has(f.name) ? structuredClone(f) : { ...structuredClone(f), optional: true }));
+  return { name, scope, fields };
 }

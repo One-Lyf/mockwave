@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { memoryBackend } from '../store/backend';
 import type { FieldDef } from '../store/schema';
 import { createStore } from '../store/store';
-import { childListEntity, groupChildren, orderChildren, type ChildList } from './childList';
+import { checkChildList, childListEntity, groupChildren, orderChildren, type ChildList } from './childList';
 import { groupPeriodBucket, periodBucketEntity, type PeriodBucket } from './periodBucket';
 import { checkStoredSettings, readSettings, settingsEntity, type SettingsBlock } from './settings';
 
@@ -76,6 +76,55 @@ describe('ChildList in a KitStore entity', () => {
     const groups = groupChildren(list, rows)!;
     expect(groups.map((g) => [g.header, g.items.map((r) => r.label)])).toEqual([['Day 1', ['Pier', 'Lunch']]]);
     expect(typeof groups[0].items[0].id).toBe('string');
+  });
+
+  it('stores a header row that omits label, as the block allows', async () => {
+    const entity = childListEntity('stop', list)!;
+    expect(entity.fields.map((f) => [f.name, !!f.optional])).toEqual([
+      ['trip', false],
+      ['label', true],
+      ['position', false],
+      ['section', true],
+    ]);
+    expect(list.fields[1].optional).toBeUndefined();
+    const store = createStore({ entities: [{ name: 'trip', scope: 'user', fields: [] }, entity] }, opts());
+    await store.load();
+    const trip = (await store.dispatch('trip.create', {})) as { id: string };
+    const header = { trip: trip.id, position: 0, section: 'Day 1' };
+    expect(checkChildList(list, [header])).toEqual([]);
+    await store.dispatch('stop.create', header);
+    await store.dispatch('stop.create', { trip: trip.id, label: 'Pier', position: 1 });
+    const rows = store.list('stop');
+    expect(rows).toHaveLength(2);
+    expect(groupChildren(list, rows, trip.id)!.map((g) => [g.header, g.items.map((r) => r.label)])).toEqual([
+      ['Day 1', ['Pier']],
+    ]);
+    // An item row still needs its label when read back, and every row still needs its parent.
+    await store.dispatch('stop.create', { trip: trip.id, position: 2 });
+    expect(groupChildren(list, store.list('stop'), trip.id)).toBeNull();
+    await expect(store.dispatch('stop.create', { position: 3, section: 'Day 2' })).rejects.toThrow();
+  });
+
+  it('children of two parents never interleave', async () => {
+    const entity = childListEntity('stop', list)!;
+    const store = createStore({ entities: [{ name: 'trip', scope: 'user', fields: [] }, entity] }, opts());
+    await store.load();
+    const a = (await store.dispatch('trip.create', {})) as { id: string };
+    const b = (await store.dispatch('trip.create', {})) as { id: string };
+    await store.dispatch('stop.create', { trip: a.id, position: 0, section: 'A header' });
+    await store.dispatch('stop.create', { trip: a.id, label: 'A-stop', position: 1 });
+    await store.dispatch('stop.create', { trip: b.id, label: 'B-stop', position: 0.5 });
+    const rows = store.list('stop');
+    expect(groupChildren(list, rows, a.id)!.map((g) => [g.header, g.items.map((r) => r.label)])).toEqual([
+      ['A header', ['A-stop']],
+    ]);
+    expect(groupChildren(list, rows, b.id)!.map((g) => [g.header, g.items.map((r) => r.label)])).toEqual([
+      [null, ['B-stop']],
+    ]);
+    expect(orderChildren(list, rows, b.id)!.map((r) => r.label)).toEqual(['B-stop']);
+    // Without a parent id, rows of two parents are refused rather than mixed.
+    expect(groupChildren(list, rows)).toBeNull();
+    expect(orderChildren(list, rows)).toBeNull();
   });
 
   it('the store refuses a child whose parent is missing, and a bad list has no entity', async () => {
