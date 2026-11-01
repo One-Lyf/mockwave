@@ -136,6 +136,32 @@ body {
   font-size: 0.9rem;
 }
 
+.preview-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.preview-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-sm);
+  border: 1px solid var(--surface-3);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.preview-pill.brand {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: transparent;
+}
+
 .mockwave-main {
   flex: 1;
   min-width: 0;

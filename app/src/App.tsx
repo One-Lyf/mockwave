@@ -148,6 +148,11 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
         )}
         <h1>Mockwave</h1>
         <p className="tagline">Generate Realistic Mock Data With Copy-As-Code</p>
+        {/* Mockwave ships as a free preview: every feature works with no account or purchase. */}
+        <p className="preview-badges">
+          <span className="preview-pill">Free preview</span>
+          <span className="preview-pill brand">Part of VibeRider</span>
+        </p>
       </header>
 
       <main className="mockwave-main">
