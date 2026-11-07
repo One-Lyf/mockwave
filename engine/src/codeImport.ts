@@ -1018,7 +1018,7 @@ export function patchCode(imp: SchemaImport, _config: MockConfig): string {
   // This will use the spans from the import to rewrite values in the original source
   
   // For now, just return the original source with a note
-  return `${imp.source}\n\n// Mockwave: patchCode not yet implemented - see codeImport.ts`;
+  return `${imp.source}\n\n// Basewave: patchCode not yet implemented - see codeImport.ts`;
 }
 
 /**
@@ -1071,23 +1071,23 @@ export function unifiedDiff(a: string, b: string, context = 2): string {
 
 /** A prompt the user hands to THEIR coding agent to extract the data schema in
  *  the exact shape parseSchema() understands (so the import is clean without
- *  Mockwave's own AI). */
+ *  Basewave's own AI). */
 export const IMPORT_PROMPT = [
-  'Extract the data schema from my project as a self-contained snippet I can paste into Mockwave to generate mocks.',
+  'Extract the data schema from my project as a self-contained snippet I can paste into Basewave to generate mocks.',
   '',
   'Rules:',
   '- Output ONLY the data structure definition: TypeScript interfaces/types, JSON Schema, GraphQL SDL, or plain JSON.',
   '- One type/interface per snippet for best results.',
   '- Keep field names exactly as they appear in your code.',
   '- Use primitive types (string, number, boolean, Date) where possible.',
-  '- Include nested objects and arrays — Mockwave will recursively generate mocks.',
+  '- Include nested objects and arrays — Basewave will recursively generate mocks.',
   '- Optional fields (field?: Type) are supported and will generate optional mock values.',
   '- If you have custom types, include their definitions or use primitive types as fallbacks.',
 ].join('\n');
 
 /** Plain description of the accepted format, for users pasting by hand (no AI). */
 export const IMPORT_FORMAT_HELP = [
-  'Paste your data schema. Mockwave reads:',
+  'Paste your data schema. Basewave reads:',
   '  • TypeScript interfaces: interface User { id: string; name: string; age: number; }',
   '  • TypeScript types: type User = { id: string; name: string; };',
   '  • JSON Schema: { "type": "object", "properties": { "id": { "type": "string" } } }',
