@@ -1,8 +1,8 @@
-# Mockwave
+# Basewave
 
-> Generate realistic mock data with the copy-as-code pattern
+> Your App's Data: generate realistic mock data with the copy-as-code pattern
 
-**Mockwave** is the third app in the suite (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). It applies the proven copy-as-code pattern to data mocking: import your real data schema, configure mocking rules, and copy the generated mock data back into your project.
+**Basewave** is the data app in the suite (Rackwave: audio, Fluxwave: UI, **Basewave: data**). It applies the proven copy-as-code pattern to data mocking: import your real data schema, configure mocking rules, and copy the generated mock data back into your project.
 
 ```
 Paste your schema -> Configure mocks -> Generate realistic data -> Copy mock code
@@ -16,7 +16,7 @@ All suite apps follow the same pattern:
 |-----|--------|---------|
 | **Rackwave** | Audio (Web Audio API) | Import code -> tune -> export patched code |
 | **Fluxwave** | UI (React/JSX) | Import code -> edit -> export patched code |
-| **Mockwave** | Data (Schemas) | Import schema -> configure -> export mock data |
+| **Basewave** | Data (Schemas) | Import schema -> configure -> export mock data |
 
 Each app:
 - Parses real source code **deterministically** (no AI required)
@@ -38,7 +38,7 @@ npm run dev
 # http://localhost:3003
 ```
 
-Paste a TypeScript interface, JSON Schema, or plain JSON object, and Mockwave will:
+Paste a TypeScript interface, JSON Schema, or plain JSON object, and Basewave will:
 1. Parse your schema
 2. Identify fields and their types
 3. Generate realistic mock data
@@ -117,6 +117,12 @@ export const mockUser: User = {
 - Generate mock data in your original format
 - Copy directly into your codebase
 - Diff view to see what changed
+
+### Table Editor
+- Edit a data table inline: add, remove and rename columns (Text, Number, Boolean, Date), add, remove and edit rows
+- Built-in sample data sets (Recipes, Budget, Tasks) loadable from the empty state
+- The contract output carries the column schema (name + type) with the rows, so a Basewave table feeds Fluxwave as module data
+- Copy the contract output as code
 
 ### Coming Soon
 - Patched source output (original schema with mock values inline)

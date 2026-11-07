@@ -8,3 +8,5 @@ export * from '../blocks/referenceTable';
 export * from '../blocks/periodBucket';
 export * from '../blocks/settings';
 export * from '../blocks/childList';
+export * from '../blocks/basewaveTable';
+export * from '../blocks/sampleData';
