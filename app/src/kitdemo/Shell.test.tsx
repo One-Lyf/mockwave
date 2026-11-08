@@ -18,6 +18,11 @@ if (typeof elementProto.scrollTo !== 'function') elementProto.scrollTo = () => {
 
 const schema = schemaJson as KitSchema;
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// Drain the microtask queue without touching the shared timer pool: store.load() and the
+// memory backend are promise-only and act() flushes the resulting render. When the whole
+// suite runs on a busy box, real-timer macrotasks are the first thing the scheduler starves,
+// which is what made these tests time out; only jsdom's async popstate still needs timer turns.
+const flush = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
 
 type GoalSeed = { id: string; kcal: number; active: boolean; createdAt: string };
 
@@ -48,7 +53,7 @@ async function renderShell(goalSeeds: GoalSeed[] = [], entry: { kdScreen: string
   const r = createRoot(container);
   root = r;
   await act(async () => { r.render(<Shell store={store} session={null} schema={schema} />); });
-  await act(async () => { await tick(); }); // let store.load() resolve and Home paint
+  await act(async () => { await flush(); }); // let store.load() resolve and Home paint
 }
 
 const heading = () => container!.querySelector('h1')!.textContent;
@@ -65,8 +70,17 @@ const byLabelPrefix = (prefix: string) => {
   return el as HTMLButtonElement;
 };
 
-// Clicks and then yields so a history traversal's popstate (a macrotask in jsdom) lands in act().
+// A plain click only sets state (go() pushes synchronously): a microtask flush is enough.
 const click = async (el: Element) => {
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flush();
+  });
+};
+
+// The header Back button and system back/forward traverse history: jsdom fires popstate as a
+// macrotask and React's scheduled re-render needs one more, so two timer turns in act().
+const clickBack = async (el: Element) => {
   await act(async () => {
     el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await tick();
@@ -92,7 +106,7 @@ describe('kitdemo Shell history (real jsdom history)', () => {
       await click(byLabelPrefix('Foods:'));
       expect(heading()).toBe('Foods');
       expect(history.state?.kdScreen).toBe('foods');
-      await click(byLabel('Back'));
+      await clickBack(byLabel('Back'));
       expect(heading()).toBe('Kitdemo');
     }
     // Exactly one pushed entry: each trip pops what it pushed instead of stacking dead entries.
@@ -104,7 +118,7 @@ describe('kitdemo Shell history (real jsdom history)', () => {
   it('one more back from Home exits at the base entry instead of traversing a dead entry', async () => {
     await renderShell();
     await click(byLabelPrefix('Foods:'));
-    await click(byLabel('Back'));
+    await clickBack(byLabel('Back'));
     expect(heading()).toBe('Kitdemo');
 
     await systemBack(); // at the first entry this press leaves the app; jsdom no-ops
@@ -187,7 +201,7 @@ describe('kitdemo Shell reload (mount reads the entry state)', () => {
     await renderShell([], { kdScreen: 'foods' });
     expect(heading()).toBe('Foods');
 
-    await click(byLabel('Back'));
+    await clickBack(byLabel('Back'));
     expect(heading()).toBe('Kitdemo');
     expect(history.state).toBe(null);
   });
@@ -197,7 +211,7 @@ describe('kitdemo Shell reload (mount reads the entry state)', () => {
     await renderShell([], { kdScreen: 'goal' });
     expect(heading()).toBe('Goal');
 
-    await click(byLabel('Back'));
+    await clickBack(byLabel('Back'));
     expect(heading()).toBe('Kitdemo');
     expect(history.state).toBe(null);
   });

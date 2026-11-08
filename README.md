@@ -120,7 +120,7 @@ export const mockUser: User = {
 
 ### Table Editor
 - Edit a data table inline: add, remove and rename columns (Text, Number, Boolean, Date), add, remove and edit rows
-- Built-in sample data sets (Recipes, Budget, Tasks) loadable from the empty state
+- Built-in sample data sets (Recipes, Budget Envelopes, Chores) loadable from the empty state
 - The contract output carries the column schema (name + type) with the rows, so a Basewave table feeds Fluxwave as module data
 - Copy the contract output as code
 
