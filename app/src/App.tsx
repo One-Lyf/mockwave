@@ -1,5 +1,5 @@
 /**
- * Mockwave - Data Mocking Wave
+ * Basewave - Your App's Data
  *
  * Pattern: copy-as-code for generating realistic mock data structures.
  *
@@ -15,8 +15,9 @@
 
 import { Component, useState, type ReactNode } from 'react';
 import { generateMock, parseSchema } from '../../engine/src';
-import type { SchemaImport, SchemaType } from '../../engine/src';
+import type { BasewaveTable, SchemaImport, SchemaType } from '../../engine/src';
 import ThemeToggle from './ThemeToggle';
+import TableEditor from './TableEditor';
 
 import './index.css';
 
@@ -55,7 +56,7 @@ class ResultBoundary extends Component<{ children: ReactNode }, { failed: boolea
         <section className="export-panel">
           <h2>Generated Mock</h2>
           <div className="error" role="alert">
-            Mockwave generated mock data but could not display it. Try a smaller or simpler schema.
+            Basewave generated mock data but could not display it. Try a smaller or simpler schema.
           </div>
         </section>
       );
@@ -80,6 +81,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [runId, setRunId] = useState<number>(0);
+  const [table, setTable] = useState<BasewaveTable | null>(null);
 
   const handleGenerateMock = () => {
     setError(null);
@@ -91,7 +93,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
     }
 
     const unreadable =
-      'Mockwave could not read this schema. Paste a TypeScript interface or type, a JSON Schema, sample JSON, or a GraphQL type.';
+      'Basewave could not read this schema. Paste a TypeScript interface or type, a JSON Schema, sample JSON, or a GraphQL type.';
     // Parsing can throw on hostile input (deep nesting); it must surface as an error, never a blank app
     let imp: SchemaImport | null;
     try {
@@ -116,7 +118,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
       setRunId((n) => n + 1);
     } catch {
       setResult(null);
-      setError('Mockwave read this schema but could not generate mock data for it.');
+      setError('Basewave read this schema but could not generate mock data for it.');
     }
   };
 
@@ -146,21 +148,28 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
             <ThemeToggle />
           </div>
         )}
-        <h1>Mockwave</h1>
-        <p className="tagline">Generate Realistic Mock Data With Copy-As-Code</p>
-        {/* Mockwave ships as a free preview: every feature works with no account or purchase. */}
+        <h1>Basewave</h1>
+        <p className="tagline">Your App's Data</p>
+        {/* Basewave ships as a free preview: every feature works with no account or purchase. */}
         <p className="preview-badges">
           <span className="preview-pill">Free preview</span>
-          <span className="preview-pill brand">Part of VibeRider</span>
+          <span className="preview-pill brand">Part of WaveRider</span>
         </p>
       </header>
 
       <main className="mockwave-main">
+        <TableEditor
+          table={table}
+          onLoad={setTable}
+          onChange={setTable}
+          onClear={() => setTable(null)}
+        />
+
         <section className="import-panel">
           <h2>Import Your Schema</h2>
           <p>
             Paste your data schema, TypeScript interface, or JSON structure below.
-            Mockwave will generate realistic mock data that matches your structure.
+            Basewave will generate realistic mock data that matches your structure.
           </p>
 
           <textarea
