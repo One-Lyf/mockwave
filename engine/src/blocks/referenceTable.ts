@@ -29,7 +29,7 @@ export function checkReferenceTable(table: ReferenceTable): string[] {
     const at = `field "${f.name}"`;
     let ok = true;
     if (typeof f.name !== 'string' || !NAME.test(f.name)) {
-      errors.push(`${at}: name must match ${NAME}`);
+      errors.push(`${at}: name must match a lowercase letter, then letters or numbers only`);
       ok = false;
     }
     if ((SYSTEM_FIELDS as readonly string[]).includes(f.name)) {

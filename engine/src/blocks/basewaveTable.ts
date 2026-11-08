@@ -17,6 +17,10 @@ import type { SurfaceField } from '../store/store';
 export type ColumnType = 'text' | 'number' | 'boolean' | 'date';
 
 export interface BasewaveColumn {
+  /** Stable internal key. Row values are keyed by this id, never by the name, so renaming
+   *  a column (even to an empty or duplicate name mid-edit) never moves or drops data. */
+  id: string;
+  /** The user-facing label. Mapped to the contract field name only when generating output. */
   name: string;
   type: ColumnType;
 }
@@ -49,6 +53,9 @@ export const COLUMN_LABELS: Record<ColumnType, string> = {
 /** The same name rule the kit schema applies to entities and fields. */
 const NAME = /^[a-z][a-zA-Z0-9]*$/;
 
+/** The name rule in plain words, for user-facing messages (never show the raw regex). */
+const NAME_WORDS = 'a lowercase letter, then letters or numbers only';
+
 /** Editor column type -> contract field type. */
 const TO_FIELD: Record<ColumnType, FieldType> = {
   text: 'string',
@@ -70,30 +77,141 @@ export function columnToField(col: BasewaveColumn): FieldDef {
   return { name: col.name, type: TO_FIELD[col.type], optional: true };
 }
 
-/** A contract field as an editor column, or null for types the editor cannot represent. */
-export function fieldToColumn(field: FieldDef): BasewaveColumn | null {
+/** A contract field as an editor column (without the id, which the caller assigns), or null
+ *  for types the editor cannot represent. */
+export function fieldToColumn(field: FieldDef): Omit<BasewaveColumn, 'id'> | null {
   const type = FROM_FIELD[field.type];
   return type ? { name: field.name, type } : null;
 }
 
-/** Table -> contract: the column schema (name + type) with a copy of the rows. */
+/** The smallest free `c<n>` id, so a column keeps its id across renames and removals. */
+export function newColumnId(columns: BasewaveColumn[]): string {
+  const used = new Set(columns.map((c) => c.id));
+  let n = 0;
+  while (used.has(`c${n}`)) n++;
+  return `c${n}`;
+}
+
+/** Add a column with a fresh stable id; existing row values are untouched. */
+export function addColumn(table: BasewaveTable, name?: string, type: ColumnType = 'text'): BasewaveTable {
+  let n = table.columns.length + 1;
+  while (table.columns.some((c) => c.name === `column${n}`)) n++;
+  return {
+    ...table,
+    columns: [...table.columns, { id: newColumnId(table.columns), name: name ?? `column${n}`, type }],
+  };
+}
+
+/**
+ * Rename a column's label only. Row values stay keyed by the column id, so clearing the
+ * name to retype it, or typing a duplicate, never remaps, overwrites or drops a value.
+ */
+export function renameColumn(table: BasewaveTable, ci: number, name: string): BasewaveTable {
+  return { ...table, columns: table.columns.map((c, i) => (i === ci ? { ...c, name } : c)) };
+}
+
+/** Coerce a value to a column type; undefined when the value cannot be represented. */
+export function coerceValue(type: ColumnType, value: unknown): unknown {
+  if (value === undefined || value === null) return undefined;
+  if (type === 'text') return String(value);
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  if (type === 'number') {
+    const n = typeof value === 'number' ? value : Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  if (type === 'boolean') {
+    if (typeof value === 'boolean') return value;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return undefined;
+  }
+  // date: keep ISO date strings, blank anything else
+  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined;
+}
+
+/** Change a column's type, coercing its values to the new type (blank when not representable). */
+export function setColumnType(table: BasewaveTable, ci: number, type: ColumnType): BasewaveTable {
+  const col = table.columns[ci];
+  if (!col || col.type === type) return table;
+  return {
+    ...table,
+    columns: table.columns.map((c, i) => (i === ci ? { ...c, type } : c)),
+    rows: table.rows.map((row) => {
+      if (!(col.id in row)) return row;
+      const v = coerceValue(type, row[col.id]);
+      const next = { ...row };
+      if (v === undefined) delete next[col.id];
+      else next[col.id] = v;
+      return next;
+    }),
+  };
+}
+
+/** Remove a column and only its own values (keyed by its id). */
+export function removeColumn(table: BasewaveTable, ci: number): BasewaveTable {
+  const col = table.columns[ci];
+  if (!col) return table;
+  return {
+    ...table,
+    columns: table.columns.filter((_, i) => i !== ci),
+    rows: table.rows.map((row) => {
+      if (!(col.id in row)) return row;
+      const { [col.id]: _v, ...rest } = row;
+      return rest;
+    }),
+  };
+}
+
+/** Set one cell, keyed by the column's stable id. */
+export function setCell(table: BasewaveTable, ri: number, ci: number, value: unknown): BasewaveTable {
+  const col = table.columns[ci];
+  if (!col) return table;
+  return {
+    ...table,
+    rows: table.rows.map((row, i) => {
+      if (i !== ri) return row;
+      const next = { ...row };
+      if (value === undefined) delete next[col.id];
+      else next[col.id] = value;
+      return next;
+    }),
+  };
+}
+
+/** Table -> contract: the column schema (name + type) with the rows, keyed by column name. */
 export function tableToContract(table: BasewaveTable): BasewaveContract {
   return {
     name: table.name,
     fields: table.columns.map(columnToField),
-    rows: structuredClone(table.rows),
+    rows: table.rows.map((row) => {
+      const out: ReferenceRow = {};
+      for (const col of table.columns) {
+        const v = row[col.id];
+        if (v !== undefined) out[col.name] = v;
+      }
+      return out;
+    }),
   };
 }
 
 /** Contract -> table. Returns null when a field type has no editor column (enum, ref). */
 export function contractToTable(name: string, ref: ReferenceTable): BasewaveTable | null {
+  const fields = ref.fields ?? [];
   const columns: BasewaveColumn[] = [];
-  for (const f of ref.fields ?? []) {
+  for (const [i, f] of fields.entries()) {
     const c = fieldToColumn(f);
     if (!c) return null;
-    columns.push(c);
+    columns.push({ id: `c${i}`, ...c });
   }
-  return { name, columns, rows: structuredClone(ref.rows ?? []) };
+  const rows = (ref.rows ?? []).map((row) => {
+    const out: BasewaveRow = {};
+    fields.forEach((f, i) => {
+      const v = row[f.name];
+      if (v !== undefined) out[`c${i}`] = v;
+    });
+    return out;
+  });
+  return { name, columns, rows };
 }
 
 /** The contract as JSON — the copy-as-code output for a table. */
@@ -108,7 +226,7 @@ export function parseContract(json: string): BasewaveContract {
     throw new Error('contract must be an object');
   }
   if (typeof parsed.name !== 'string' || !NAME.test(parsed.name)) {
-    throw new Error(`contract name must match ${NAME}`);
+    throw new Error(`contract name must match ${NAME_WORDS}`);
   }
   if (!Array.isArray(parsed.fields) || !Array.isArray(parsed.rows)) {
     throw new Error('contract needs "fields" and "rows" lists');
@@ -138,7 +256,7 @@ export function parseTable(json: string): BasewaveTable {
 export function checkBasewaveTable(table: BasewaveTable): string[] {
   const errors: string[] = [];
   if (!table || typeof table.name !== 'string' || !NAME.test(table.name)) {
-    errors.push(`table name must match ${NAME}`);
+    errors.push(`table name must match ${NAME_WORDS}`);
   }
   if (!Array.isArray(table.columns) || !Array.isArray(table.rows)) {
     errors.push('table needs "columns" and "rows" lists');

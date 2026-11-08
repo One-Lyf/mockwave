@@ -1,7 +1,7 @@
 {
-  "name": "mockwave",
+  "name": "basewave",
   "version": "0.0.1",
-  "description": "Mockwave - The data-mocking Wave. Copy-as-code pattern for generating realistic mock data.",
+  "description": "Basewave - Your App's Data. Copy-as-code pattern for generating realistic mock data.",
   "type": "module",
   "scripts": {
     "dev": "vite",

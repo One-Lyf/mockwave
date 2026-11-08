@@ -8,10 +8,16 @@
 
 import { useState } from 'react';
 import {
+  addColumn,
+  checkBasewaveTable,
+  coerceValue,
   COLUMN_LABELS,
   COLUMN_TYPES,
-  checkBasewaveTable,
+  removeColumn,
+  renameColumn,
   serializeTable,
+  setCell,
+  setColumnType,
   blankTable,
   getSampleTable,
   SAMPLE_TABLES,
@@ -32,17 +38,6 @@ function displayValue(value: unknown, type: ColumnType): string {
   return String(value);
 }
 
-/** Raw input text -> a typed cell value. A blank cell becomes undefined (column is optional). */
-function coerceDraft(type: ColumnType, draft: string): unknown {
-  if (type === 'text') return draft;
-  if (draft.trim() === '') return undefined;
-  if (type === 'number') {
-    const n = Number(draft);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return draft; // the date input yields YYYY-MM-DD, an ISO date string
-}
-
 interface CellProps {
   value: unknown;
   type: ColumnType;
@@ -61,7 +56,7 @@ function Cell({ value, type, label, onCommit }: CellProps) {
   };
 
   const commit = () => {
-    onCommit(coerceDraft(type, draft));
+    onCommit(coerceValue(type, draft));
     setEditing(false);
   };
 
@@ -159,53 +154,9 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
   const errors = checkBasewaveTable(table);
   const code = serializeTable(table);
 
-  const addColumn = () => {
-    let n = table.columns.length + 1;
-    while (table.columns.some((c) => c.name === `column${n}`)) n++;
-    onChange({ ...table, columns: [...table.columns, { name: `column${n}`, type: 'text' }] });
-  };
-
-  const renameColumn = (ci: number, name: string) => {
-    const old = table.columns[ci].name;
-    const columns = table.columns.map((c, i) => (i === ci ? { ...c, name } : c));
-    const rows = table.rows.map((row) => {
-      if (!(old in row)) return row;
-      const { [old]: v, ...rest } = row;
-      return name ? { ...rest, [name]: v } : rest;
-    });
-    onChange({ ...table, columns, rows });
-  };
-
-  const setColumnType = (ci: number, type: ColumnType) => {
-    onChange({ ...table, columns: table.columns.map((c, i) => (i === ci ? { ...c, type } : c)) });
-  };
-
-  const removeColumn = (ci: number) => {
-    const name = table.columns[ci].name;
-    const rows = table.rows.map((row) => {
-      const { [name]: _v, ...rest } = row;
-      return rest;
-    });
-    onChange({ ...table, columns: table.columns.filter((_, i) => i !== ci), rows });
-  };
-
   const addRow = () => onChange({ ...table, rows: [...table.rows, {}] });
 
   const removeRow = (ri: number) => onChange({ ...table, rows: table.rows.filter((_, i) => i !== ri) });
-
-  const setCell = (ri: number, ci: number, value: unknown) => {
-    const name = table.columns[ci].name;
-    onChange({
-      ...table,
-      rows: table.rows.map((row, i) => {
-        if (i !== ri) return row;
-        const next = { ...row };
-        if (value === undefined) delete next[name];
-        else next[name] = value;
-        return next;
-      }),
-    });
-  };
 
   const handleCopy = async () => {
     try {
@@ -230,7 +181,7 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
             spellCheck={false}
           />
         </label>
-        <button type="button" className="btn" onClick={addColumn}>
+        <button type="button" className="btn" onClick={() => onChange(addColumn(table))}>
           Add Column
         </button>
         <button type="button" className="btn" onClick={addRow}>
@@ -243,7 +194,9 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
 
       {errors.length > 0 && (
         <div className="error" role="alert">
-          {errors[0]}
+          {errors.map((e, i) => (
+            <div key={`${i}-${e}`}>{e}</div>
+          ))}
         </div>
       )}
 
@@ -252,34 +205,36 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
           <thead>
             <tr>
               {table.columns.map((col, ci) => (
-                <th key={ci} scope="col">
-                  <input
-                    className="col-name"
-                    value={col.name}
-                    aria-label={`Column ${ci + 1} name`}
-                    spellCheck={false}
-                    onChange={(e) => renameColumn(ci, e.target.value)}
-                  />
-                  <select
-                    className="col-type"
-                    value={col.type}
-                    aria-label={`Column ${ci + 1} type`}
-                    onChange={(e) => setColumnType(ci, e.target.value as ColumnType)}
-                  >
-                    {COLUMN_TYPES.map((t) => (
-                      <option key={t} value={t}>
-                        {COLUMN_LABELS[t]}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    aria-label={`Remove column ${col.name || ci + 1}`}
-                    onClick={() => removeColumn(ci)}
-                  >
-                    Remove
-                  </button>
+                <th key={col.id} scope="col">
+                  <div className="th-inner">
+                    <input
+                      className="col-name"
+                      value={col.name}
+                      aria-label={`Column ${ci + 1} name`}
+                      spellCheck={false}
+                      onChange={(e) => onChange(renameColumn(table, ci, e.target.value))}
+                    />
+                    <select
+                      className="col-type"
+                      value={col.type}
+                      aria-label={`Column ${ci + 1} type`}
+                      onChange={(e) => onChange(setColumnType(table, ci, e.target.value as ColumnType))}
+                    >
+                      {COLUMN_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {COLUMN_LABELS[t]}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      aria-label={`Remove column ${col.name || ci + 1}`}
+                      onClick={() => onChange(removeColumn(table, ci))}
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </th>
               ))}
               <th className="row-actions-head">
@@ -298,12 +253,12 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
             {table.rows.map((row, ri) => (
               <tr key={ri}>
                 {table.columns.map((col, ci) => (
-                  <td key={ci}>
+                  <td key={col.id}>
                     <Cell
-                      value={row[col.name]}
+                      value={row[col.id]}
                       type={col.type}
                       label={`Row ${ri + 1}, ${col.name || `column ${ci + 1}`}`}
-                      onCommit={(v) => setCell(ri, ci, v)}
+                      onCommit={(v) => onChange(setCell(table, ri, ci, v))}
                     />
                   </td>
                 ))}

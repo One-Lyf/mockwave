@@ -416,7 +416,9 @@ button:disabled {
   background: var(--surface-2);
 }
 
-.data-table th {
+/* The th stays a normal table cell (so headers align with their columns); the flex
+   column lives in the inner wrapper around the name input, type select and Remove. */
+.data-table th .th-inner {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
@@ -425,6 +427,9 @@ button:disabled {
 
 .row-actions-head {
   min-width: 0;
+  /* Keeps the visually-hidden label's absolute box inside this cell, so a wide table
+     never leaks page-level horizontal scroll. */
+  position: relative;
 }
 
 .row-actions {

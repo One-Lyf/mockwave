@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   COLUMN_TYPES,
   checkBasewaveTable,
+  coerceValue,
   contractToTable,
   parseContract,
   parseTable,
+  removeColumn,
+  renameColumn,
   serializeTable,
+  setCell,
+  setColumnType,
   tableToContract,
   tableToDataSurface,
   type BasewaveTable,
@@ -16,17 +21,25 @@ import { blankTable, getSampleTable, SAMPLE_TABLES } from './sampleData';
 const allTypes: BasewaveTable = {
   name: 'items',
   columns: [
-    { name: 'label', type: 'text' },
-    { name: 'count', type: 'number' },
-    { name: 'active', type: 'boolean' },
-    { name: 'on', type: 'date' },
+    { id: 'c0', name: 'label', type: 'text' },
+    { id: 'c1', name: 'count', type: 'number' },
+    { id: 'c2', name: 'active', type: 'boolean' },
+    { id: 'c3', name: 'on', type: 'date' },
   ],
+  // row values are keyed by the stable column id, never by the name
   rows: [
-    { label: 'One', count: 1, active: true, on: '2026-11-01' },
-    { label: 'Two', count: 2.5, active: false, on: '2026-11-02' },
-    { label: 'Blank cells allowed' }, // every column is optional in the contract
+    { c0: 'One', c1: 1, c2: true, c3: '2026-11-01' },
+    { c0: 'Two', c1: 2.5, c2: false, c3: '2026-11-02' },
+    { c0: 'Blank cells allowed' }, // every column is optional in the contract
   ],
 };
+
+/** The contract rows, keyed by column name. */
+const allTypesContractRows = [
+  { label: 'One', count: 1, active: true, on: '2026-11-01' },
+  { label: 'Two', count: 2.5, active: false, on: '2026-11-02' },
+  { label: 'Blank cells allowed' },
+];
 
 describe('tableToContract', () => {
   it('carries the column schema (name + type) with the rows', () => {
@@ -38,7 +51,7 @@ describe('tableToContract', () => {
       { name: 'active', type: 'boolean', optional: true },
       { name: 'on', type: 'date', optional: true },
     ]);
-    expect(contract.rows).toEqual(allTypes.rows);
+    expect(contract.rows).toEqual(allTypesContractRows);
     // the contract is the ReferenceTable shape Fluxwave consumes as module data
     expect(checkReferenceTable(contract)).toEqual([]);
   });
@@ -46,7 +59,7 @@ describe('tableToContract', () => {
   it('maps every editor column type to a contract field type', () => {
     const table: BasewaveTable = {
       name: 't',
-      columns: COLUMN_TYPES.map((type, i) => ({ name: `c${i}`, type })),
+      columns: COLUMN_TYPES.map((type, i) => ({ id: `c${i}`, name: `f${i}`, type })),
       rows: [],
     };
     expect(tableToContract(table).fields.map((f) => f.type)).toEqual(['string', 'number', 'boolean', 'date']);
@@ -55,7 +68,7 @@ describe('tableToContract', () => {
   it('returns a copy: editing the contract never reaches the table rows', () => {
     const contract = tableToContract(allTypes);
     (contract.rows[0] as Record<string, unknown>).label = 'Changed';
-    expect(allTypes.rows[0].label).toBe('One');
+    expect(allTypes.rows[0].c0).toBe('One');
   });
 });
 
@@ -71,7 +84,7 @@ describe('serialize + round trip', () => {
       ['active', 'boolean'],
       ['on', 'date'],
     ]);
-    expect(parsed.rows).toEqual(allTypes.rows);
+    expect(parsed.rows).toEqual(allTypesContractRows);
     expect(parseTable(json)).toEqual(allTypes);
   });
 
@@ -123,18 +136,120 @@ describe('checkBasewaveTable', () => {
     const bad: BasewaveTable = {
       name: 'Bad Name',
       columns: [
-        { name: 'id', type: 'text' },
-        { name: 'label', type: 'text' },
-        { name: 'label', type: 'text' },
-        { name: 'count', type: 'number' },
+        { id: 'c0', name: 'id', type: 'text' },
+        { id: 'c1', name: 'label', type: 'text' },
+        { id: 'c2', name: 'label', type: 'text' },
+        { id: 'c3', name: 'count', type: 'number' },
       ],
-      rows: [{ label: 'x', count: 'not a number' }],
+      rows: [{ c1: 'x', c3: 'not a number' }],
     };
     const errors = checkBasewaveTable(bad).join('\n');
     expect(errors).toMatch(/table name must match/);
     expect(errors).toMatch(/field "id": reserved name/);
     expect(errors).toMatch(/field "label": duplicate name/);
     expect(errors).toMatch(/"count": must be a finite number/);
+  });
+});
+
+describe('renameColumn: stable column ids keep the data', () => {
+  it('clearing the title header and typing "name" keeps all 4 titles', () => {
+    let table = getSampleTable('recipes')!;
+    const ci = table.columns.findIndex((c) => c.name === 'title');
+    const id = table.columns[ci].id;
+    // clear the header, then retype character by character, as the input fires per keystroke
+    for (const draft of ['', 'n', 'na', 'nam', 'name']) {
+      table = renameColumn(table, ci, draft);
+    }
+    expect(table.columns[ci].name).toBe('name');
+    expect(table.rows.map((r) => r[id])).toEqual(['Chickpea Curry', 'Lemon Pasta', 'Beef Stir Fry', 'Tomato Soup']);
+    // the values surface under the new name in the output, and the table checks clean
+    expect(tableToContract(table).rows.map((r) => r.name)).toEqual([
+      'Chickpea Curry',
+      'Lemon Pasta',
+      'Beef Stir Fry',
+      'Tomato Soup',
+    ]);
+    expect(checkBasewaveTable(table)).toEqual([]);
+  });
+
+  it('an empty or partial rename flags the alert but never drops the values', () => {
+    let table = getSampleTable('recipes')!;
+    const ci = table.columns.findIndex((c) => c.name === 'title');
+    table = renameColumn(table, ci, '');
+    expect(checkBasewaveTable(table).some((e) => e.includes('name must match'))).toBe(true);
+    expect(table.rows.every((r) => r[table.columns[ci].id] !== undefined)).toBe(true);
+  });
+
+  it('renaming onto a duplicate name alerts and overwrites nothing; renaming away restores a clean table', () => {
+    let table = getSampleTable('recipes')!;
+    const si = table.columns.findIndex((c) => c.name === 'servings');
+    const pi = table.columns.findIndex((c) => c.name === 'prepMinutes');
+    const servingsId = table.columns[si].id;
+    const prepId = table.columns[pi].id;
+
+    table = renameColumn(table, si, 'prepMinutes'); // duplicate of the existing column
+    expect(checkBasewaveTable(table).some((e) => e.includes('duplicate name'))).toBe(true);
+    // both columns kept their own values, keyed by their own ids
+    expect(table.rows.map((r) => r[servingsId])).toEqual([4, 2, 3, 6]);
+    expect(table.rows.map((r) => r[prepId])).toEqual([35, 20, 25, 40]);
+
+    table = renameColumn(table, si, 'servingsX');
+    expect(checkBasewaveTable(table)).toEqual([]);
+    const rows = tableToContract(table).rows;
+    expect(rows.map((r) => r.servingsX)).toEqual([4, 2, 3, 6]);
+    // the original prepMinutes values are intact
+    expect(rows.map((r) => r.prepMinutes)).toEqual([35, 20, 25, 40]);
+  });
+});
+
+describe('setColumnType coerces the values instead of leaving stale ones', () => {
+  it('text switched to Boolean blanks non-boolean values (no more "True" for text)', () => {
+    const table = getSampleTable('recipes')!;
+    const ci = table.columns.findIndex((c) => c.name === 'title');
+    const next = setColumnType(table, ci, 'boolean');
+    expect(next.rows.every((r) => r[next.columns[ci].id] === undefined)).toBe(true);
+    expect(checkBasewaveTable(next)).toEqual([]);
+  });
+
+  it('number switched to Text stringifies, Boolean keeps real booleans', () => {
+    const table = getSampleTable('recipes')!;
+    const si = table.columns.findIndex((c) => c.name === 'servings');
+    const vi = table.columns.findIndex((c) => c.name === 'vegetarian');
+    let next = setColumnType(table, si, 'text');
+    expect(next.rows.map((r) => r[next.columns[si].id])).toEqual(['4', '2', '3', '6']);
+    next = setColumnType(next, vi, 'number');
+    expect(next.rows.map((r) => r[next.columns[vi].id])).toEqual([1, 1, 0, 1]);
+    expect(checkBasewaveTable(next)).toEqual([]);
+  });
+});
+
+describe('cell and column helpers key by id', () => {
+  it('setCell writes by column id and removeColumn drops only that column', () => {
+    let table = getSampleTable('recipes')!;
+    const si = table.columns.findIndex((c) => c.name === 'servings');
+    table = setCell(table, 0, si, 9);
+    expect(table.rows[0][table.columns[si].id]).toBe(9);
+    table = removeColumn(table, si);
+    expect(table.columns.some((c) => c.name === 'servings')).toBe(false);
+    expect(table.rows.every((r) => !('c1' in r))).toBe(true);
+    expect(tableToContract(table).rows.map((r) => r.title)).toEqual([
+      'Chickpea Curry',
+      'Lemon Pasta',
+      'Beef Stir Fry',
+      'Tomato Soup',
+    ]);
+    expect(checkBasewaveTable(table)).toEqual([]);
+  });
+
+  it('coerceValue blanks what the type cannot represent', () => {
+    expect(coerceValue('number', 'abc')).toBeUndefined();
+    expect(coerceValue('number', '')).toBeUndefined();
+    expect(coerceValue('number', '2.5')).toBe(2.5);
+    expect(coerceValue('boolean', 'Chickpea Curry')).toBeUndefined();
+    expect(coerceValue('boolean', 'true')).toBe(true);
+    expect(coerceValue('date', 'not a date')).toBeUndefined();
+    expect(coerceValue('date', '2026-11-01')).toBe('2026-11-01');
+    expect(coerceValue('text', 4)).toBe('4');
   });
 });
 
