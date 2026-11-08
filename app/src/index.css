@@ -1,76 +1,42 @@
-/* Mockwave - Base Styles */
-/* Theme: Follows the shared design system (Rackwave/Fluxwave) */
+@import './studio-tokens.css';
+
+/* Basewave: the data module of WaveRider. Colors come from the shared Studio Dark tokens
+   (studio-tokens.css, --sd-*), the same palette the WaveRider shell and Fluxwave use, so the
+   modules read as one product. Light/dark: [data-theme] or [data-kit-theme] on <html>, set by
+   theme.ts (Light, Dark, or System = the OS setting) or by the shell that hosts this app.
+   The older names below (--bg-1, --surface-1, --ink-1, --accent) are this file's aliases. */
 
 :root {
-  /* Colors */
-  --bg-1: #000000;
-  --bg-2: #111111;
-  --bg-3: #1a1a1a;
-  --surface-1: #222222;
-  --surface-2: #2a2a2a;
-  --surface-3: #333333;
-  
-  --ink-1: #ffffff;
-  --ink-2: #a0a0a0;
-  --ink-3: #606060;
-  
-  --accent: #ff4444;
-  --accent-2: #ff6666;
-  --accent-3: #882222;
-  
+  --bg-1: var(--sd-bg);
+  --bg-2: var(--sd-panel);
+  --surface-1: var(--sd-panel);
+  --surface-2: var(--sd-panel2);
+  --surface-3: var(--sd-line);
+  --edge: var(--sd-line2);
+
+  --ink-1: var(--sd-text);
+  --ink-2: var(--sd-muted);
+  --ink-3: var(--sd-dim);
+
+  --accent: var(--sd-accent);
+  --accent-ink: var(--sd-accent-ink);
+  --danger: var(--sd-danger);
+
   /* Spacing */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
-  
+
   /* Border radius */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
   /* Font */
-  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-/* Light theme: [data-theme] on <html> is set by theme.ts (Light, Dark, or System =
-   the OS setting). Without it (no JS yet), the OS setting applies. */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg-1: #ffffff;
-    --bg-2: #f6f6f6;
-    --bg-3: #eeeeee;
-    --surface-1: #f4f4f5;
-    --surface-2: #ffffff;
-    --surface-3: #d4d4d8;
-
-    --ink-1: #111111;
-    --ink-2: #52525b;
-    --ink-3: #71717a;
-
-    --accent: #c62828;
-    --accent-2: #d84343;
-    --accent-3: #f3c4c4;
-  }
-}
-
-:root[data-theme="light"] {
-  --bg-1: #ffffff;
-  --bg-2: #f6f6f6;
-  --bg-3: #eeeeee;
-  --surface-1: #f4f4f5;
-  --surface-2: #ffffff;
-  --surface-3: #d4d4d8;
-
-  --ink-1: #111111;
-  --ink-2: #52525b;
-  --ink-3: #71717a;
-
-  --accent: #c62828;
-  --accent-2: #d84343;
-  --accent-3: #f3c4c4;
+  --font-family: -apple-system, "Helvetica Neue", Arial, system-ui, sans-serif;
+  --font-mono: var(--sd-mono);
 }
 
 /* Reset */
@@ -84,14 +50,7 @@ html {
   font-family: var(--font-family);
   font-size: 14px;
   line-height: 1.4;
-  color-scheme: dark;
 }
-
-@media (prefers-color-scheme: light) {
-  html:not([data-theme="dark"]) { color-scheme: light; }
-}
-
-html[data-theme="light"] { color-scheme: light; }
 
 body {
   overflow-x: hidden;
@@ -109,26 +68,34 @@ body {
 }
 
 .mockwave-header {
-  padding: var(--space-xl);
-  text-align: center;
+  padding: var(--space-md) var(--space-xl);
+  background: var(--sd-panel);
   border-bottom: 1px solid var(--surface-3);
 }
 
-.header-bar {
+.header-row {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: var(--space-sm);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-.theme-toggle {
-  padding: var(--space-xs) var(--space-md);
-  font-size: 0.8rem;
+.brand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs) var(--space-md);
+  min-width: 0;
 }
 
 .mockwave-header h1 {
-  font-size: 2rem;
+  font-family: var(--sd-serif);
+  font-size: 1.6rem;
   font-weight: 700;
-  margin-bottom: var(--space-xs);
+  line-height: 1.1;
 }
 
 .mockwave-header .tagline {
@@ -136,23 +103,37 @@ body {
   font-size: 0.9rem;
 }
 
+/* Module tag: the data module's colour, as in the shell's library and flow nodes. */
+.module-tag {
+  align-self: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--sd-data);
+  background: var(--sd-data-bg);
+}
+
 .preview-badges {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
+  align-items: center;
   gap: var(--space-sm);
-  margin-top: var(--space-sm);
 }
 
 .preview-pill {
   display: inline-flex;
   align-items: center;
-  padding: 1px var(--space-sm);
-  border: 1px solid var(--surface-3);
+  min-height: 32px;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--edge);
   border-radius: 999px;
-  background: var(--surface-1);
+  background: var(--surface-2);
   color: var(--ink-2);
   font-size: 0.75rem;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -160,6 +141,13 @@ body {
   border-color: var(--accent);
   color: var(--accent);
   background: transparent;
+}
+
+.theme-toggle {
+  min-height: 32px;
+  padding: 0 var(--space-md);
+  font-size: 0.75rem;
+  border-radius: 999px;
 }
 
 .mockwave-main {
@@ -175,27 +163,88 @@ body {
 .import-panel, .export-panel {
   min-width: 0;
   background: var(--surface-1);
+  border: 1px solid var(--surface-3);
   border-radius: var(--radius-lg);
   padding: var(--space-lg);
   margin-bottom: var(--space-xl);
 }
 
-.import-panel h2, .export-panel h2 {
-  font-size: 1.25rem;
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
+}
+
+.import-panel h2, .export-panel h2 {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.import-actions .count {
+  flex: 1 1 auto;
+  color: var(--ink-3);
+  font-size: 0.8rem;
+}
+
+.kbd {
+  font: 600 0.65rem var(--font-mono);
+  color: var(--ink-2);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.example-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.example-label {
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+
+.chip {
+  min-height: 36px;
+  padding: 0 var(--space-md);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-1);
+  border: 1px solid var(--edge);
+  font-size: 0.8rem;
+}
+
+.chip:hover {
+  border-color: var(--accent);
 }
 
 .import-panel p {
   color: var(--ink-2);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 /* Form Elements */
 textarea {
   width: 100%;
   padding: var(--space-md);
-  background: var(--surface-2);
-  border: 1px solid var(--surface-3);
+  background: var(--bg-1);
+  border: 1px solid var(--edge);
   border-radius: var(--radius-md);
   color: var(--ink-1);
   font-family: var(--font-mono);
@@ -217,7 +266,8 @@ textarea::placeholder {
 button {
   cursor: pointer;
   border: none;
-  border-radius: var(--radius-md);
+  border-radius: 999px;
+  min-height: 40px;
   padding: var(--space-sm) var(--space-lg);
   font-family: inherit;
   font-size: 0.9rem;
@@ -232,17 +282,17 @@ button:disabled {
 
 .primary-btn {
   background: var(--accent);
-  color: var(--bg-1);
+  color: var(--accent-ink);
 }
 
 .primary-btn:hover:not(:disabled) {
-  background: var(--accent-2);
+  filter: brightness(1.08);
 }
 
 .btn {
   background: var(--surface-2);
   color: var(--ink-1);
-  border: 1px solid var(--surface-3);
+  border: 1px solid var(--edge);
 }
 
 .btn:hover:not(:disabled) {
@@ -263,6 +313,7 @@ button:disabled {
   color: var(--ink-2);
   border: none;
   border-bottom: 2px solid transparent;
+  border-radius: 0;
 }
 
 .tab:hover {
@@ -322,10 +373,10 @@ button:disabled {
 
 /* Error */
 .error {
-  color: var(--accent);
+  color: var(--danger);
   overflow-wrap: anywhere;
   padding: var(--space-sm) var(--space-md);
-  background: rgba(255, 68, 68, 0.1);
+  background: var(--sd-danger-bg);
   border-radius: var(--radius-md);
   margin-bottom: var(--space-md);
   font-size: 0.875rem;
@@ -370,8 +421,8 @@ button:disabled {
   width: 100%;
   min-width: 0;
   padding: var(--space-xs) var(--space-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--surface-3);
+  background: var(--bg-1);
+  border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   color: var(--ink-1);
   font: inherit;
@@ -464,12 +515,12 @@ button:disabled {
 
 /* A kept raw value that does not fit the column's current type (never deleted by a type change). */
 .cell.cell-invalid {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .cell.cell-invalid:hover:not(:disabled) {
-  background: rgba(255, 68, 68, 0.1);
+  background: var(--sd-danger-bg);
 }
 
 .cell:focus-visible,
@@ -542,15 +593,11 @@ button:disabled {
 /* Responsive */
 @media (max-width: 768px) {
   .mockwave-header {
-    padding: var(--space-lg);
-  }
-  
-  .mockwave-main {
     padding: var(--space-md);
   }
-  
-  .mockwave-header h1 {
-    font-size: 1.5rem;
+
+  .mockwave-main {
+    padding: var(--space-md);
   }
   
   textarea {

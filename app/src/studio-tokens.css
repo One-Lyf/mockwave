@@ -1,0 +1,85 @@
+/* Studio Dark tokens: one palette for every Waves Suite module (WaveRider shell, Fluxwave,
+ * Basewave). The same file lives in each repo; their tests pin its hash. Do not edit one copy.
+ * Dark is the mockup palette (docs/viberider/mockups). Light is the same hues on a paper ground.
+ * Theme switch: [data-theme] or [data-kit-theme] on <html>; with neither, the OS setting decides. */
+:root {
+  --sd-bg: #eef0eb;
+  --sd-panel: #f7f8f4;
+  --sd-panel2: #e7ebe4;
+  --sd-line: #d2d8d0;
+  --sd-line2: #aab4a7;
+  --sd-text: #1a1f1a;
+  --sd-muted: #4a544a;
+  --sd-dim: #5c665c;
+  --sd-accent: #1a7049;
+  --sd-accent-ink: #ffffff;
+  --sd-data: #1d68a0;
+  --sd-event: #8a5710;
+  --sd-slot: #6a45b0;
+  --sd-audio: #1a7049;
+  --sd-danger: #b3362b;
+  --sd-data-bg: #1d68a010;
+  --sd-event-bg: #8a571010;
+  --sd-slot-bg: #6a45b010;
+  --sd-audio-bg: #1a704910;
+  --sd-danger-bg: #b3362b10;
+  --sd-dot: #cdd4ca;
+  --sd-shadow: #0000001f;
+  --sd-phone-bg: #f6f3ec;
+  --sd-phone-ink: #1d1d1b;
+  --sd-serif: Georgia, "Times New Roman", serif;
+  --sd-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-kit-theme="light"]) {
+    --sd-bg: #121512;
+    --sd-panel: #1a1e1a;
+    --sd-panel2: #202520;
+    --sd-line: #2c332c;
+    --sd-line2: #4a554a;
+    --sd-text: #e8ece6;
+    --sd-muted: #a9b3a8;
+    --sd-dim: #8d988d;
+    --sd-accent: #3fb27f;
+    --sd-accent-ink: #0d1a12;
+    --sd-data: #4fa3e0;
+    --sd-event: #e0a34f;
+    --sd-slot: #a98be6;
+    --sd-audio: #3fb27f;
+    --sd-danger: #f08a7e;
+    --sd-data-bg: #4fa3e01f;
+    --sd-event-bg: #e0a34f1f;
+    --sd-slot-bg: #a98be61f;
+    --sd-audio-bg: #3fb27f1f;
+    --sd-danger-bg: #f08a7e1f;
+    --sd-dot: #2a312a;
+    --sd-shadow: #0006;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"], :root[data-kit-theme="dark"] {
+  --sd-bg: #121512;
+  --sd-panel: #1a1e1a;
+  --sd-panel2: #202520;
+  --sd-line: #2c332c;
+  --sd-line2: #4a554a;
+  --sd-text: #e8ece6;
+  --sd-muted: #a9b3a8;
+  --sd-dim: #8d988d;
+  --sd-accent: #3fb27f;
+  --sd-accent-ink: #0d1a12;
+  --sd-data: #4fa3e0;
+  --sd-event: #e0a34f;
+  --sd-slot: #a98be6;
+  --sd-audio: #3fb27f;
+  --sd-danger: #f08a7e;
+  --sd-data-bg: #4fa3e01f;
+  --sd-event-bg: #e0a34f1f;
+  --sd-slot-bg: #a98be61f;
+  --sd-audio-bg: #3fb27f1f;
+  --sd-danger-bg: #f08a7e1f;
+  --sd-dot: #2a312a;
+  --sd-shadow: #0006;
+  color-scheme: dark;
+}

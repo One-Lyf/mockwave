@@ -31,6 +31,58 @@ const FORMAT_LABELS: Record<SchemaType, string> = {
   'graphql-type': 'GraphQL SDL',
 };
 
+/** One-click starting points for the import box, one per format Basewave reads. */
+export const SCHEMA_EXAMPLES: { id: string; label: string; text: string }[] = [
+  {
+    id: 'ts',
+    label: 'TypeScript',
+    text: `interface Recipe {
+  id: string;
+  title: string;
+  minutes: number;
+  vegetarian: boolean;
+  createdAt: Date;
+}
+`,
+  },
+  {
+    id: 'json-schema',
+    label: 'JSON Schema',
+    text: `{
+  "type": "object",
+  "title": "Recipe",
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "minutes": { "type": "integer" }
+  }
+}
+`,
+  },
+  {
+    id: 'json',
+    label: 'Sample JSON',
+    text: `{
+  "id": "r_1",
+  "title": "Skillet Lasagna",
+  "minutes": 35,
+  "vegetarian": false
+}
+`,
+  },
+  {
+    id: 'graphql',
+    label: 'GraphQL',
+    text: `type Recipe {
+  id: ID!
+  title: String!
+  minutes: Int
+  vegetarian: Boolean
+}
+`,
+  },
+];
+
 /** How many unrecognized field names to list before summarizing the rest. */
 const NOTE_LIMIT = 6;
 
@@ -143,18 +195,19 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   return (
     <div className="mockwave-app">
       <header className="mockwave-header">
-        {!embedded && (
-          <div className="header-bar">
-            <ThemeToggle />
+        <div className="header-row">
+          <div className="brand">
+            <h1>Basewave</h1>
+            <span className="module-tag">Data</span>
+            <p className="tagline">Your App's Data</p>
           </div>
-        )}
-        <h1>Basewave</h1>
-        <p className="tagline">Your App's Data</p>
-        {/* Basewave ships as a free preview: every feature works with no account or purchase. */}
-        <p className="preview-badges">
-          <span className="preview-pill">Free preview</span>
-          <span className="preview-pill brand">Part of WaveRider</span>
-        </p>
+          {/* Basewave ships as a free preview: every feature works with no account or purchase. */}
+          <p className="preview-badges">
+            <span className="preview-pill">Free preview</span>
+            <span className="preview-pill brand">Part of WaveRider</span>
+            {!embedded && <ThemeToggle />}
+          </p>
+        </div>
       </header>
 
       <main className="mockwave-main">
@@ -165,16 +218,42 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
           onClear={() => setTable(null)}
         />
 
-        <section className="import-panel">
-          <h2>Import Your Schema</h2>
+        <section className="import-panel" aria-labelledby="import-heading">
+          <div className="panel-head">
+            <h2 id="import-heading">Import Your Schema</h2>
+            <span className="module-tag">Step 1</span>
+          </div>
           <p>
             Paste your data schema, TypeScript interface, or JSON structure below.
             Basewave will generate realistic mock data that matches your structure.
           </p>
 
+          <div className="example-row" role="group" aria-label="Start from an example">
+            <span className="example-label">Start from</span>
+            {SCHEMA_EXAMPLES.map((ex) => (
+              <button
+                key={ex.id}
+                type="button"
+                className="chip"
+                onClick={() => {
+                  setSchemaInput(ex.text);
+                  setError(null);
+                }}
+              >
+                {ex.label}
+              </button>
+            ))}
+          </div>
+
           <textarea
             value={schemaInput}
             onChange={(e) => setSchemaInput(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                handleGenerateMock();
+              }
+            }}
             aria-label="Schema"
             spellCheck={false}
             placeholder={`Paste your schema here, e.g.:
@@ -202,19 +281,39 @@ interface User {
 
           {error && <div className="error" role="alert">{error}</div>}
 
-          <button
-            className="primary-btn"
-            onClick={handleGenerateMock}
-            disabled={!schemaInput.trim()}
-          >
-            Generate Mock Data
-          </button>
+          <div className="import-actions">
+            <span className="count" aria-live="polite">
+              {schemaInput.trim() ? `${schemaInput.split('\n').length} lines` : 'Nothing pasted yet'}
+            </span>
+            <kbd className="kbd">Ctrl Enter</kbd>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setSchemaInput('');
+                setError(null);
+              }}
+              disabled={!schemaInput}
+            >
+              Clear
+            </button>
+            <button
+              className="primary-btn"
+              onClick={handleGenerateMock}
+              disabled={!schemaInput.trim()}
+            >
+              Generate Mock Data
+            </button>
+          </div>
         </section>
 
         {result && (
           <ResultBoundary key={runId}>
             <section className="export-panel">
-              <h2>Generated Mock</h2>
+              <div className="panel-head">
+                <h2>Generated Mock</h2>
+                <span className="module-tag">Step 2</span>
+              </div>
               <p className="detected">
                 Detected {result.format}: <code>{result.name}</code>
               </p>
