@@ -1,5 +1,5 @@
 // Theme mode: light / dark / system, the same pattern as Rackwave (see its
-// app/src/theme.ts). The palette lives in index.css as [data-theme] blocks;
+// app/src/theme.ts). The palette is the shared Studio Dark token set (studio-tokens.css);
 // this module only stores the choice and applies the resolved theme to <html>.
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ResolvedTheme = 'light' | 'dark';
@@ -31,7 +31,9 @@ function applyResolvedTheme(mode: ThemeMode) {
   if (typeof document === 'undefined') return;
   const theme = resolveTheme(mode);
   document.documentElement.setAttribute('data-theme', theme);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#000000' : '#ffffff');
+  // The kit's attribute too, so a Fluxwave Theme Toggle on the same page agrees with this one.
+  document.documentElement.setAttribute('data-kit-theme', theme);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#121512' : '#eef0eb');
 }
 
 export function setThemeMode(mode: ThemeMode) {
