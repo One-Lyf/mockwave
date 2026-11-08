@@ -35,6 +35,9 @@ export default defineConfig(({ mode }) => ({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    // @module-federation/vite 1.23.11 no longer forces esnext, so Vite 8's default
+    // target applies and lightningcss emits inert --lightningcss-* vars into the CSS.
+    target: 'esnext',
     // Vite 8 defaults to the oxc minifier, which mis-hoists a module-federation
     // bootstrap binding into a temporal-dead-zone reference and white-screens
     // a reloaded bundle. esbuild still minifies and keeps that binding valid.
