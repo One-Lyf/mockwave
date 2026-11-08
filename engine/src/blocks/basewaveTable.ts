@@ -120,8 +120,10 @@ export function renameColumn(table: BasewaveTable, ci: number, name: string): Ba
  *  whitespace. Exponent (`1e3`), hex (`0x10`), `Infinity`, `NaN` and blank do not match. */
 const PLAIN_DECIMAL = /^\s*-?\d+(\.\d+)?\s*$/;
 
-/** An ISO date, optionally with a time: YYYY-MM-DD[T HH:MM[:SS][Z|±HH:MM]]. */
-const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+/** An ISO date, optionally with a time: YYYY-MM-DD[T HH:MM[:SS][Z|±HH:MM]]. Hours are 00-23,
+ *  minutes and seconds 00-59, and the offset is Z or ±HH:MM with HH 00-23 and MM 00-59, so
+ *  every value this accepts is also accepted by Date.parse (which rejects +99:99 and +24:00). */
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/;
 
 /** True when y-m-d is a real calendar date (2026-02-30 and 2025-02-29 are not). */
 function isCalendarDate(y: number, m: number, d: number): boolean {
@@ -134,8 +136,9 @@ function isCalendarDate(y: number, m: number, d: number): boolean {
 /**
  * Derive the typed value of a raw cell for a column type; undefined when the raw value is blank
  * or cannot be represented (an invalid cell). Number accepts any plain decimal (`007`, `" 42 "`,
- * `320.50`, `-0`) typed as Number(trimmed); `1e3`, `0x10`, `Infinity`, `NaN` and `""` are not
- * numbers. Text keeps a whitespace-only value as-is; only a truly empty cell is blank. Date
+ * `320.50`, `-0`) typed as Number(trimmed), but only when that is finite (a 400-digit string
+ * overflows to Infinity); `1e3`, `0x10`, `Infinity`, `NaN` and `""` are not numbers. Text keeps
+ * a whitespace-only value as-is; only a truly empty cell is blank. Date
  * accepts only a real calendar date in YYYY-MM-DD form, optionally with a time (2026-02-30 is
  * invalid). Boolean accepts true/false, 1/0 and "true"/"false"/"1"/"0" case-insensitively.
  * The raw value is never rewritten here.
@@ -148,7 +151,9 @@ export function coerceValue(type: ColumnType, value: unknown): unknown {
     if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
     if (typeof value === 'boolean') return value ? 1 : 0;
     if (typeof value === 'string') {
-      return PLAIN_DECIMAL.test(value) ? Number(value.trim()) : undefined;
+      if (!PLAIN_DECIMAL.test(value)) return undefined;
+      const n = Number(value.trim());
+      return Number.isFinite(n) ? n : undefined; // a 400-digit decimal is Infinity, not a number
     }
     return undefined;
   }

@@ -469,6 +469,83 @@ describe('valid input must not read as an error (KJ nits on #20)', () => {
   });
 });
 
+describe('cell validator and contract check agree (KJ REJECT on #21)', () => {
+  // Raw values across every column type: the KJ cases (+99:99, +24:00, a 400-digit decimal),
+  // the earlier edge strings, and valid + invalid dates and numbers.
+  const RAW_VALUES: unknown[] = [
+    '320.50', '-0', '1.0', '007', ' 42 ', 42, -2.5, 0, '1'.repeat(308),
+    '9'.repeat(400), '-' + '9'.repeat(400), '1e3', '0x10', 'Infinity', 'NaN', 'abc', '', '   ', undefined, null,
+    '2026-11-01', '2024-02-29', '2026-11-01T10:30', '2026-11-01T10:30:45',
+    '2026-11-01T10:30:45Z', '2026-11-01T23:59:59-08:00', '2026-11-01T00:00+05:30',
+    '2026-01-01T10:00+23:59',
+    '2026-01-01T10:00+99:99', '2026-01-01T10:00+24:00', '2026-02-30', '2025-02-29',
+    '2026-13-01', '2026-11-00', '2026-2-3', '2026/11/01', '2026-11-01 10:30',
+    '2026-11-01T25:00', '2026-11-01T10:60', 'not a date', 20261101,
+    true, false, 1, 0, 'true', 'FALSE', '1', '0', 2, 'yes', 'hello',
+  ];
+
+  it('the KJ cases are invalid cells: bounded date offset, finite number', () => {
+    expect(isInvalidCell('2026-01-01T10:00+99:99', 'date')).toBe(true);
+    expect(isInvalidCell('2026-01-01T10:00+24:00', 'date')).toBe(true);
+    expect(isInvalidCell('2026-01-01T10:00+23:59', 'date')).toBe(false);
+    expect(isInvalidCell('9'.repeat(400), 'number')).toBe(true);
+    expect(isInvalidCell('-' + '9'.repeat(400), 'number')).toBe(true);
+    expect(isInvalidCell('1'.repeat(308), 'number')).toBe(false);
+    expect(coerceValue('date', '2026-01-01T10:00+99:99')).toBeUndefined();
+    expect(coerceValue('number', '9'.repeat(400))).toBeUndefined();
+  });
+
+  it('iff: some cell flagged invalid exactly when checkBasewaveTable rejects, per type per value', () => {
+    for (const type of COLUMN_TYPES) {
+      for (const value of RAW_VALUES) {
+        const table: BasewaveTable = {
+          name: 't',
+          columns: [{ id: 'c0', name: 'val', type }],
+          rows: [{ c0: value }],
+        };
+        const cellFlagged = table.rows.some((row) =>
+          table.columns.some((col) => isInvalidCell(row[col.id], col.type)),
+        );
+        const errors = checkBasewaveTable(table);
+        const rejected = errors.length > 0;
+        if (cellFlagged !== rejected) {
+          throw new Error(
+            `iff broken: type=${type} value=${JSON.stringify(value) ?? String(value)} cellFlagged=${cellFlagged} errors=${JSON.stringify(errors)}`,
+          );
+        }
+        // no case may have a contract rejection without a flagged cell: when no cell is
+        // invalid, the contract output itself must pass the contract check clean
+        if (!cellFlagged) expect(checkReferenceTable(tableToContract(table))).toEqual([]);
+      }
+    }
+  });
+
+  it('iff at table level: one table spanning every column type with every raw value', () => {
+    const table: BasewaveTable = {
+      name: 'probe',
+      columns: COLUMN_TYPES.map((type, i) => ({ id: `c${i}`, name: `v${i}`, type })),
+      rows: RAW_VALUES.map((v) => ({ c0: v, c1: v, c2: v, c3: v })),
+    };
+    const cellFlagged = table.rows.some((row) =>
+      table.columns.some((col) => isInvalidCell(row[col.id], col.type)),
+    );
+    expect(cellFlagged).toBe(true);
+    expect(checkBasewaveTable(table).length > 0).toBe(cellFlagged);
+    // and a clean table has neither a flagged cell nor a contract rejection
+    const clean: BasewaveTable = {
+      name: 'clean',
+      columns: COLUMN_TYPES.map((type, i) => ({ id: `c${i}`, name: `v${i}`, type })),
+      rows: [{ c0: 'hello', c1: '42', c2: 'true', c3: '2026-11-01' }],
+    };
+    const cleanFlagged = clean.rows.some((row) =>
+      clean.columns.some((col) => isInvalidCell(row[col.id], col.type)),
+    );
+    expect(cleanFlagged).toBe(false);
+    expect(checkBasewaveTable(clean)).toEqual([]);
+    expect(checkReferenceTable(tableToContract(clean))).toEqual([]);
+  });
+});
+
 describe('newColumnId never re-issues an id', () => {
   it('stays unique across add/remove/add cycles', () => {
     let t = blankTable(); // c0
