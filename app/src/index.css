@@ -462,6 +462,16 @@ button:disabled {
   border-color: var(--surface-3);
 }
 
+/* A kept raw value that does not fit the column's current type (never deleted by a type change). */
+.cell.cell-invalid {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cell.cell-invalid:hover:not(:disabled) {
+  background: rgba(255, 68, 68, 0.1);
+}
+
 .cell:focus-visible,
 .btn:focus-visible,
 .primary-btn:focus-visible,

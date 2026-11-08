@@ -13,6 +13,7 @@ import {
   coerceValue,
   COLUMN_LABELS,
   COLUMN_TYPES,
+  isInvalidCell,
   removeColumn,
   renameColumn,
   serializeTable,
@@ -42,11 +43,13 @@ interface CellProps {
   value: unknown;
   type: ColumnType;
   label: string;
+  /** The kept raw value does not fit the column's current type (a type change never deletes it). */
+  invalid: boolean;
   onCommit: (v: unknown) => void;
 }
 
 /** One inline-editable cell: a button that opens an input on click or Enter. */
-function Cell({ value, type, label, onCommit }: CellProps) {
+function Cell({ value, type, label, invalid, onCommit }: CellProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
 
@@ -61,12 +64,14 @@ function Cell({ value, type, label, onCommit }: CellProps) {
   };
 
   if (!editing) {
+    const shown = displayValue(value, type);
     return (
       <button
         type="button"
-        className="cell"
+        className={invalid ? 'cell cell-invalid' : 'cell'}
         aria-label={label}
-        title={`${label}: ${displayValue(value, type)}`}
+        aria-invalid={invalid || undefined}
+        title={invalid ? `${label}: ${shown} (not a valid ${COLUMN_LABELS[type]} value, kept as-is)` : `${label}: ${shown}`}
         onClick={start}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
@@ -75,7 +80,7 @@ function Cell({ value, type, label, onCommit }: CellProps) {
           }
         }}
       >
-        {displayValue(value, type)}
+        {shown}
       </button>
     );
   }
@@ -258,6 +263,7 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
                       value={row[col.id]}
                       type={col.type}
                       label={`Row ${ri + 1}, ${col.name || `column ${ci + 1}`}`}
+                      invalid={isInvalidCell(row[col.id], col.type)}
                       onCommit={(v) => onChange(setCell(table, ri, ci, v))}
                     />
                   </td>

@@ -32,6 +32,9 @@ export interface BasewaveTable {
   name: string;
   columns: BasewaveColumn[];
   rows: BasewaveRow[];
+  /** Monotonic source of column ids, so a fresh id is never re-issued after a remove + add.
+   *  Not part of the contract; derived from the columns when absent (e.g. after a round trip). */
+  idSeq?: number;
 }
 
 /** The contract a Basewave table serializes to: column schema (name + type) with the rows. */
@@ -84,10 +87,11 @@ export function fieldToColumn(field: FieldDef): Omit<BasewaveColumn, 'id'> | nul
   return type ? { name: field.name, type } : null;
 }
 
-/** The smallest free `c<n>` id, so a column keeps its id across renames and removals. */
-export function newColumnId(columns: BasewaveColumn[]): string {
-  const used = new Set(columns.map((c) => c.id));
-  let n = 0;
+/** The next never-before-used `c<n>` id, so a column keeps its id across renames and a fresh
+ *  column never re-uses an id a removed column had (add/remove/add stays unique). */
+export function newColumnId(table: BasewaveTable): string {
+  const used = new Set(table.columns.map((c) => c.id));
+  let n = table.idSeq ?? 0;
   while (used.has(`c${n}`)) n++;
   return `c${n}`;
 }
@@ -96,9 +100,11 @@ export function newColumnId(columns: BasewaveColumn[]): string {
 export function addColumn(table: BasewaveTable, name?: string, type: ColumnType = 'text'): BasewaveTable {
   let n = table.columns.length + 1;
   while (table.columns.some((c) => c.name === `column${n}`)) n++;
+  const id = newColumnId(table);
   return {
     ...table,
-    columns: [...table.columns, { id: newColumnId(table.columns), name: name ?? `column${n}`, type }],
+    idSeq: Math.max(table.idSeq ?? 0, Number(id.slice(1)) + 1),
+    columns: [...table.columns, { id, name: name ?? `column${n}`, type }],
   };
 }
 
@@ -129,7 +135,21 @@ export function coerceValue(type: ColumnType, value: unknown): unknown {
   return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined;
 }
 
-/** Change a column's type, coercing its values to the new type (blank when not representable). */
+/** True for an absent or whitespace-only value: a blank cell, never an invalid one. */
+function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+/** True when a present value does not fit the column's current type. The raw value is kept in
+ *  the row (flagged invalid by checkBasewaveTable, so the banner counts it and Copy is disabled),
+ *  which is what makes switching the type back restore it exactly. */
+export function isInvalidCell(value: unknown, type: ColumnType): boolean {
+  return !isBlank(value) && coerceValue(type, value) === undefined;
+}
+
+/** Change a column's type. Values that convert are converted; values that do not convert stay
+ *  as the original raw value flagged invalid. No value is ever deleted by a type change, so
+ *  switching back to the original type restores every value exactly. */
 export function setColumnType(table: BasewaveTable, ci: number, type: ColumnType): BasewaveTable {
   const col = table.columns[ci];
   if (!col || col.type === type) return table;
@@ -138,10 +158,12 @@ export function setColumnType(table: BasewaveTable, ci: number, type: ColumnType
     columns: table.columns.map((c, i) => (i === ci ? { ...c, type } : c)),
     rows: table.rows.map((row) => {
       if (!(col.id in row)) return row;
-      const v = coerceValue(type, row[col.id]);
+      const raw = row[col.id];
+      const v = coerceValue(type, raw);
       const next = { ...row };
-      if (v === undefined) delete next[col.id];
-      else next[col.id] = v;
+      if (v !== undefined) next[col.id] = v;
+      else if (isBlank(raw)) delete next[col.id]; // a blank stays blank
+      // else: keep the raw value; it is flagged invalid until the type is switched back
       return next;
     }),
   };
