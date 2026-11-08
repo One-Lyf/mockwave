@@ -319,6 +319,27 @@ export function parseTable(json: string): BasewaveTable {
   return table;
 }
 
+/**
+ * The WaveRider module contract (waverider src/contract/types.ts) a Basewave table feeds:
+ * the data module's out-port is a `Port` of kind `data:table`, direction `out`, and the wire
+ * payload is the contract output below, which a Fluxwave `data:table` in-port consumes as
+ * module data (the kit ReferenceTable shape `{ fields, rows }`).
+ */
+export interface DataTableOutPort {
+  id: string;
+  name: string;
+  kind: 'data:table'; // PortKind in waverider src/contract/types.ts
+  direction: 'out'; // PortDirection: wires always run out -> in
+}
+
+export const TABLE_OUT_PORT: DataTableOutPort = { id: 'rows', name: 'Rows', kind: 'data:table', direction: 'out' };
+
+/** Emit a table through the contract output: the out-port plus the payload a Fluxwave
+ *  `data:table` in-port consumes. */
+export function emitTableContract(table: BasewaveTable): { port: DataTableOutPort; payload: BasewaveContract } {
+  return { port: TABLE_OUT_PORT, payload: tableToContract(table) };
+}
+
 /** Returns every problem found; an empty list means the table serializes to a clean contract.
  *  Rows are numbered from 1 in every message, matching the "Row 1" labels in the editor cells. */
 export function checkBasewaveTable(table: BasewaveTable): string[] {

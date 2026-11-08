@@ -37,8 +37,8 @@ export const SAMPLE_TABLES: SampleTable[] = [
   },
   {
     id: 'budget',
-    label: 'Budget',
-    description: 'Monthly spending categories with amounts and due dates.',
+    label: 'Budget Envelopes',
+    description: 'Monthly envelope categories with amounts, paid flags and due dates.',
     table: {
       name: 'budget',
       columns: [
@@ -57,22 +57,22 @@ export const SAMPLE_TABLES: SampleTable[] = [
     },
   },
   {
-    id: 'tasks',
-    label: 'Tasks',
-    description: 'A todo list with done flags, due dates and estimates.',
+    id: 'chores',
+    label: 'Chores',
+    description: 'Household chores with done flags, due dates and time estimates.',
     table: {
-      name: 'tasks',
+      name: 'chores',
       columns: [
-        { id: 'c0', name: 'task', type: 'text' },
+        { id: 'c0', name: 'chore', type: 'text' },
         { id: 'c1', name: 'done', type: 'boolean' },
         { id: 'c2', name: 'dueOn', type: 'date' },
         { id: 'c3', name: 'minutes', type: 'number' },
       ],
       rows: [
-        { c0: 'Review Basewave PR', c1: false, c2: '2026-11-08', c3: 45 },
-        { c0: 'Water the plants', c1: true, c2: '2026-11-06', c3: 10 },
-        { c0: 'Book dentist appointment', c1: false, c2: '2026-11-11', c3: 15 },
-        { c0: 'Ship table editor', c1: false, c2: '2026-11-07', c3: 120 },
+        { c0: 'Take out the trash', c1: true, c2: '2026-11-06', c3: 15 },
+        { c0: 'Vacuum the living room', c1: false, c2: '2026-11-08', c3: 30 },
+        { c0: 'Laundry and fold', c1: false, c2: '2026-11-09', c3: 45 },
+        { c0: 'Mow the lawn', c1: false, c2: '2026-11-11', c3: 60 },
       ],
     },
   },
