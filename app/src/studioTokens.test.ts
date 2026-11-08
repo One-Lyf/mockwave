@@ -1,18 +1,22 @@
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { generateMock, parseSchema } from '../../engine/src';
 import { SCHEMA_EXAMPLES } from './App';
+import css from './studio-tokens.css?raw';
 
-const css = readFileSync(new URL('./studio-tokens.css', import.meta.url), 'utf8');
+// No Node imports: the root tsconfig has no Node types, so the file is read with Vite's ?raw and hashed
+// with Web Crypto.
+const sha256 = async (text: string) =>
+  [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 
 // The same file ships byte-identical in waverider, fluxwave and mockwave so the three
 // modules read as one product. Changing it means changing it in all three.
 const STUDIO_TOKENS_SHA256 = '96818c6607877d95cabd14492166dadbb409af3786da5fb37fe30943be861fff';
 
 describe('Studio Dark tokens', () => {
-  it('matches the shared token file', () => {
-    expect(createHash('sha256').update(css).digest('hex')).toBe(STUDIO_TOKENS_SHA256);
+  it('matches the shared token file', async () => {
+    expect(await sha256(css)).toBe(STUDIO_TOKENS_SHA256);
   });
 
   it('defines light, dark and the OS fallback', () => {
