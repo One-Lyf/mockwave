@@ -116,12 +116,29 @@ export function renameColumn(table: BasewaveTable, ci: number, name: string): Ba
   return { ...table, columns: table.columns.map((c, i) => (i === ci ? { ...c, name } : c)) };
 }
 
+/** A plain decimal number: optional sign, digits, optional fraction, optional surrounding
+ *  whitespace. Exponent (`1e3`), hex (`0x10`), `Infinity`, `NaN` and blank do not match. */
+const PLAIN_DECIMAL = /^\s*-?\d+(\.\d+)?\s*$/;
+
+/** An ISO date, optionally with a time: YYYY-MM-DD[T HH:MM[:SS][Z|±HH:MM]]. */
+const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})(?:T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?(?:Z|[+-]\d{2}:\d{2})?)?$/;
+
+/** True when y-m-d is a real calendar date (2026-02-30 and 2025-02-29 are not). */
+function isCalendarDate(y: number, m: number, d: number): boolean {
+  if (m < 1 || m > 12 || d < 1) return false;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+  return d <= daysInMonth;
+}
+
 /**
  * Derive the typed value of a raw cell for a column type; undefined when the raw value is blank
- * or cannot be represented (an invalid cell). A string only counts as a number when its own
- * spelling survives the round trip (`String(Number(s)) === s`), so `007`, `1e3` and `" 42 "`
- * are invalid as numbers, not silently rewritten. Boolean accepts true/false, 1/0 and
- * "true"/"false"/"1"/"0" case-insensitively.
+ * or cannot be represented (an invalid cell). Number accepts any plain decimal (`007`, `" 42 "`,
+ * `320.50`, `-0`) typed as Number(trimmed); `1e3`, `0x10`, `Infinity`, `NaN` and `""` are not
+ * numbers. Text keeps a whitespace-only value as-is; only a truly empty cell is blank. Date
+ * accepts only a real calendar date in YYYY-MM-DD form, optionally with a time (2026-02-30 is
+ * invalid). Boolean accepts true/false, 1/0 and "true"/"false"/"1"/"0" case-insensitively.
+ * The raw value is never rewritten here.
  */
 export function coerceValue(type: ColumnType, value: unknown): unknown {
   if (value === undefined || value === null) return undefined;
@@ -131,8 +148,7 @@ export function coerceValue(type: ColumnType, value: unknown): unknown {
     if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
     if (typeof value === 'boolean') return value ? 1 : 0;
     if (typeof value === 'string') {
-      const n = Number(value);
-      return Number.isFinite(n) && String(n) === value ? n : undefined;
+      return PLAIN_DECIMAL.test(value) ? Number(value.trim()) : undefined;
     }
     return undefined;
   }
@@ -147,26 +163,33 @@ export function coerceValue(type: ColumnType, value: unknown): unknown {
     }
     return undefined;
   }
-  // date: keep ISO date strings, blank anything else
-  return typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? value : undefined;
+  if (type === 'date') {
+    if (typeof value !== 'string') return undefined;
+    const m = ISO_DATE.exec(value);
+    return m && isCalendarDate(Number(m[1]), Number(m[2]), Number(m[3])) ? value : undefined;
+  }
+  return undefined;
 }
 
-/** True for an absent or whitespace-only value: a blank cell, never an invalid one. */
-function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+/** True for an absent or empty value: a blank cell, never an invalid one. A whitespace-only
+ *  string is blank for every type except text, where it is a valid value kept as-is. */
+function isBlank(value: unknown, type: ColumnType): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value !== 'string') return false;
+  return value === '' || (type !== 'text' && value.trim() === '');
 }
 
 /** True when a present value does not fit the column's current type. The raw value stays in the
  *  row (flagged invalid by checkBasewaveTable, so the banner counts it and Copy is disabled),
  *  which is what makes switching the type back restore it exactly. */
 export function isInvalidCell(value: unknown, type: ColumnType): boolean {
-  return !isBlank(value) && coerceValue(type, value) === undefined;
+  return !isBlank(value, type) && coerceValue(type, value) === undefined;
 }
 
 /** The typed value a cell currently carries: undefined for a blank cell, the coerced value for a
  *  valid one, and undefined for an invalid one (whose raw value the editor keeps as-is). */
 export function typedCellValue(type: ColumnType, raw: unknown): unknown {
-  if (isBlank(raw)) return undefined;
+  if (isBlank(raw, type)) return undefined;
   return coerceValue(type, raw);
 }
 

@@ -358,35 +358,114 @@ describe('lossless type round trips (KJ #20 round 4)', () => {
         expect(t.rows).toEqual(start.rows);
       }
     }
-    // as Number: 007, 1e3 and " 42 " are invalid (kept raw, never rewritten); blank cells stay blank
+    // as Number: 007 and " 42 " are valid plain decimals now; only 1e3 is invalid (kept raw, never
+    // rewritten); blank cells stay blank
     const asNumber = setColumnType(start, 0, 'number');
-    expect(asNumber.rows.map((r) => isInvalidCell(r.c0, 'number'))).toEqual([true, true, true, false, false, false]);
+    expect(asNumber.rows.map((r) => isInvalidCell(r.c0, 'number'))).toEqual([false, true, false, false, false, false]);
     expect(asNumber.rows.map((r) => r.c0)).toEqual(['007', '1e3', ' 42 ', '   ', '', undefined]);
-    expect(tableToContract(asNumber).rows).toEqual([{}, {}, {}, {}, {}, {}]);
+    expect(tableToContract(asNumber).rows).toEqual([{ val: 7 }, {}, { val: 42 }, {}, {}, {}]);
     expect(setColumnType(asNumber, 0, 'text').rows).toEqual(start.rows);
     // as Boolean the same edge strings are invalid but kept; blank stays blank
     const asBool = setColumnType(start, 0, 'boolean');
     expect(asBool.rows.map((r) => isInvalidCell(r.c0, 'boolean'))).toEqual([true, true, true, false, false, false]);
     expect(setColumnType(asBool, 0, 'text').rows).toEqual(start.rows);
-    // back to Text the table is clean again and the raw values are byte-identical (blank cells stay out of the contract)
+    // back to Text the table is clean again and the raw values are byte-identical (only truly empty
+    // cells stay out of the contract; a whitespace-only cell is valid Text and appears as-is)
     const back = setColumnType(setColumnType(start, 0, 'number'), 0, 'text');
     expect(back.rows).toEqual(start.rows);
     expect(checkBasewaveTable(back)).toEqual([]);
-    expect(tableToContract(back).rows.map((r) => r.val)).toEqual(['007', '1e3', ' 42 ', undefined, undefined, undefined]);
+    expect(tableToContract(back).rows.map((r) => r.val)).toEqual(['007', '1e3', ' 42 ', '   ', undefined, undefined]);
   });
 
   it('editing a cell sets a new raw value; the typed value and invalid flag derive from it', () => {
     let table = getSampleTable('recipes')!;
     const si = table.columns.findIndex((c) => c.name === 'servings');
-    table = setCell(table, 0, si, '007');
-    expect(table.rows[0][table.columns[si].id]).toBe('007'); // raw entered text
-    expect(isInvalidCell('007', 'number')).toBe(true);
+    table = setCell(table, 0, si, '1e3');
+    expect(table.rows[0][table.columns[si].id]).toBe('1e3'); // raw entered text
+    expect(isInvalidCell('1e3', 'number')).toBe(true);
     expect(checkBasewaveTable(table)).toEqual(['Row 1, column servings: not a valid Number value']);
     // the invalid cell stays out of the contract output; the other cells still carry typed values
     expect(tableToContract(table).rows[0]).toEqual({ title: 'Chickpea Curry', prepMinutes: 35, vegetarian: true, addedOn: '2026-09-14' });
     // switching the type away and back never rewrites the raw edit
     table = setColumnType(setColumnType(table, si, 'text'), si, 'number');
-    expect(table.rows[0][table.columns[si].id]).toBe('007');
+    expect(table.rows[0][table.columns[si].id]).toBe('1e3');
+  });
+});
+
+describe('valid input must not read as an error (KJ nits on #20)', () => {
+  it('Number accepts any plain decimal; only non-decimal spellings are flagged invalid', () => {
+    const table: BasewaveTable = {
+      name: 'nums',
+      columns: [{ id: 'c0', name: 'val', type: 'number' }],
+      rows: [
+        { c0: '320.50' }, { c0: '-0' }, { c0: '1.0' }, { c0: '007' }, { c0: ' 42 ' },
+        { c0: '1e3' }, { c0: '0x10' }, { c0: 'Infinity' }, { c0: 'NaN' }, { c0: '' }, {},
+      ],
+    };
+    // valid decimals are not errors; the raw strings are never rewritten
+    expect(table.rows.map((r) => isInvalidCell(r.c0, 'number'))).toEqual([
+      false, false, false, false, false, true, true, true, true, false, false,
+    ]);
+    expect(table.rows.map((r) => r.c0)).toEqual([
+      '320.50', '-0', '1.0', '007', ' 42 ', '1e3', '0x10', 'Infinity', 'NaN', '', undefined,
+    ]);
+    // the contract carries the typed Number(trimmed) of each valid cell only
+    expect(tableToContract(table).rows).toEqual([
+      { val: 320.5 }, { val: -0 }, { val: 1 }, { val: 7 }, { val: 42 },
+      {}, {}, {}, {}, {}, {},
+    ]);
+    expect(checkBasewaveTable(table)).toEqual([
+      'Row 6, column val: not a valid Number value',
+      'Row 7, column val: not a valid Number value',
+      'Row 8, column val: not a valid Number value',
+      'Row 9, column val: not a valid Number value',
+    ]);
+  });
+
+  it('Text keeps a whitespace-only value as-is in the contract; only a truly empty cell is blank', () => {
+    const table: BasewaveTable = {
+      name: 'txt',
+      columns: [{ id: 'c0', name: 'val', type: 'text' }],
+      rows: [{ c0: '   ' }, { c0: '' }, { c0: ' x ' }, {}],
+    };
+    expect(table.rows.every((r) => !isInvalidCell(r.c0, 'text'))).toBe(true);
+    expect(checkBasewaveTable(table)).toEqual([]);
+    expect(tableToContract(table).rows).toEqual([{ val: '   ' }, {}, { val: ' x ' }, {}]);
+  });
+
+  it('Date accepts only real YYYY-MM-DD calendar dates, optionally with a time', () => {
+    const valid = [
+      '2026-11-01', '2024-02-29', '2026-11-01T10:30', '2026-11-01T10:30:45',
+      '2026-11-01T10:30:45Z', '2026-11-01T23:59:59-08:00', '2026-11-01T00:00+05:30',
+    ];
+    const invalid = [
+      '2026-02-30', '2025-02-29', '2026-13-01', '2026-00-10', '2026-11-00',
+      '2026-2-3', '2026/11/01', '2026-11-01 10:30', '2026-11-01T25:00', '2026-11-01T10:60',
+      'not a date', 20261101,
+    ];
+    for (const v of valid) expect(coerceValue('date', v)).toBe(v);
+    for (const v of invalid) expect(coerceValue('date', v)).toBeUndefined();
+  });
+
+  it('the new edge values survive every A -> B -> A type round trip raw-identical', () => {
+    const start: BasewaveTable = {
+      name: 'edges2',
+      columns: [{ id: 'c0', name: 'val', type: 'text' }],
+      rows: [
+        { c0: '320.50' }, { c0: '-0' }, { c0: '1.0' }, { c0: ' 42 ' },
+        { c0: '2026-02-30' }, { c0: '2026-11-01T10:30:45Z' }, { c0: '0x10' }, { c0: 'NaN' },
+        { c0: '   ' }, { c0: '' }, {},
+      ],
+    };
+    for (const a of COLUMN_TYPES) {
+      for (const b of COLUMN_TYPES) {
+        let t = setColumnType(start, 0, a);
+        t = setColumnType(t, 0, b);
+        t = setColumnType(t, 0, a);
+        expect(t.rows).toEqual(start.rows);
+        expect(t.columns[0].type).toBe(a);
+      }
+    }
   });
 });
 
@@ -431,10 +510,17 @@ describe('cell and column helpers key by id', () => {
     expect(coerceValue('number', '')).toBeUndefined();
     expect(coerceValue('number', '2.5')).toBe(2.5);
     expect(coerceValue('number', '42')).toBe(42);
-    // a string is a number only when its own spelling survives the round trip
-    expect(coerceValue('number', '007')).toBeUndefined();
+    // any plain decimal is a valid number, typed as Number(trimmed); the raw string is kept as entered
+    expect(coerceValue('number', '007')).toBe(7);
+    expect(coerceValue('number', '320.50')).toBe(320.5);
+    expect(coerceValue('number', '-0')).toBe(-0);
+    expect(coerceValue('number', '1.0')).toBe(1);
+    expect(coerceValue('number', ' 42 ')).toBe(42);
+    // exponent, hex, non-finite spellings and blank are not numbers
     expect(coerceValue('number', '1e3')).toBeUndefined();
-    expect(coerceValue('number', ' 42 ')).toBeUndefined();
+    expect(coerceValue('number', '0x10')).toBeUndefined();
+    expect(coerceValue('number', 'Infinity')).toBeUndefined();
+    expect(coerceValue('number', 'NaN')).toBeUndefined();
     expect(coerceValue('number', true)).toBe(1);
     expect(coerceValue('number', false)).toBe(0);
     expect(coerceValue('boolean', 'Chickpea Curry')).toBeUndefined();
@@ -451,7 +537,18 @@ describe('cell and column helpers key by id', () => {
     expect(coerceValue('boolean', 2)).toBeUndefined();
     expect(coerceValue('date', 'not a date')).toBeUndefined();
     expect(coerceValue('date', '2026-11-01')).toBe('2026-11-01');
+    expect(coerceValue('date', '2026-11-01T10:30')).toBe('2026-11-01T10:30');
+    expect(coerceValue('date', '2026-11-01T10:30:45Z')).toBe('2026-11-01T10:30:45Z');
+    expect(coerceValue('date', '2026-11-01T10:30:45+05:30')).toBe('2026-11-01T10:30:45+05:30');
+    // only a real calendar date: 2026-02-30 and a non-leap 2025-02-29 are not dates
+    expect(coerceValue('date', '2026-02-30')).toBeUndefined();
+    expect(coerceValue('date', '2025-02-29')).toBeUndefined();
+    expect(coerceValue('date', '2024-02-29')).toBe('2024-02-29');
+    expect(coerceValue('date', '2026-13-01')).toBeUndefined();
+    expect(coerceValue('date', '2026-2-3')).toBeUndefined();
     expect(coerceValue('text', 4)).toBe('4');
+    // a whitespace-only value is a valid Text value, kept as-is
+    expect(coerceValue('text', '   ')).toBe('   ');
   });
 });
 
