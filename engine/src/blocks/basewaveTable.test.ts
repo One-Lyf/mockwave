@@ -150,7 +150,8 @@ describe('checkBasewaveTable', () => {
     expect(errors).toMatch(/table name must match/);
     expect(errors).toMatch(/field "id": reserved name/);
     expect(errors).toMatch(/field "label": duplicate name/);
-    expect(errors).toMatch(/"count": must be a finite number/);
+    // the mistyped cell is reported per cell, with the row numbered from 1 like the cell labels
+    expect(errors).toMatch(/Row 1, column count: not a valid Number value/);
   });
 });
 
@@ -205,19 +206,26 @@ describe('renameColumn: stable column ids keep the data', () => {
   });
 });
 
-describe('setColumnType converts what converts and never deletes a value', () => {
+describe('setColumnType never rewrites a raw value (Hand ruling: lossless type round trips)', () => {
   it('Text to Number on the 4 text titles keeps all 4 raw values flagged invalid', () => {
     const table = getSampleTable('recipes')!;
     const ci = table.columns.findIndex((c) => c.name === 'title');
     const id = table.columns[ci].id;
     const next = setColumnType(table, ci, 'number');
-    // nothing is wiped: every raw title stays in the row, keyed by the column id
+    // nothing is wiped or converted: every raw title stays in the row, keyed by the column id
     expect(next.rows.map((r) => r[id])).toEqual(['Chickpea Curry', 'Lemon Pasta', 'Beef Stir Fry', 'Tomato Soup']);
     expect(next.rows.every((r) => isInvalidCell(r[id], 'number'))).toBe(true);
-    // the banner counts one error per invalid cell, which is what disables Copy
+    // the banner counts one error per invalid cell, rows numbered from 1, which disables Copy
     const errors = checkBasewaveTable(next);
     expect(errors).toHaveLength(4);
-    expect(errors.every((e) => e.includes('must be a finite number'))).toBe(true);
+    expect(errors).toEqual([
+      'Row 1, column title: not a valid Number value',
+      'Row 2, column title: not a valid Number value',
+      'Row 3, column title: not a valid Number value',
+      'Row 4, column title: not a valid Number value',
+    ]);
+    // invalid cells stay out of the contract output
+    expect(tableToContract(next).rows.map((r) => r.title)).toEqual([undefined, undefined, undefined, undefined]);
   });
 
   it('switching back to the original type restores every value exactly', () => {
@@ -232,15 +240,17 @@ describe('setColumnType converts what converts and never deletes a value', () =>
     expect(checkBasewaveTable(next)).toEqual([]);
   });
 
-  it('Number to Text to Number is a lossless round trip', () => {
+  it('Number to Text to Number is a lossless round trip (raw stays numeric, output follows the type)', () => {
     const table = getSampleTable('recipes')!;
     const si = table.columns.findIndex((c) => c.name === 'servings');
     const id = table.columns[si].id;
     let next = setColumnType(table, si, 'text');
-    expect(next.rows.map((r) => r[id])).toEqual(['4', '2', '3', '6']);
+    expect(next.rows.map((r) => r[id])).toEqual([4, 2, 3, 6]); // raw untouched
+    expect(tableToContract(next).rows.map((r) => r.servings)).toEqual(['4', '2', '3', '6']); // typed output
     expect(checkBasewaveTable(next)).toEqual([]);
     next = setColumnType(next, si, 'number');
     expect(next.rows.map((r) => r[id])).toEqual([4, 2, 3, 6]);
+    expect(tableToContract(next).rows.map((r) => r.servings)).toEqual([4, 2, 3, 6]);
     expect(checkBasewaveTable(next)).toEqual([]);
   });
 
@@ -256,33 +266,127 @@ describe('setColumnType converts what converts and never deletes a value', () =>
     expect(checkBasewaveTable(back)).toEqual([]);
   });
 
-  it('a mixed column converts only the convertible values, Copy stays disabled while any invalid cell exists', () => {
+  it('a mixed column keeps every raw value; only the non-convertible cells are flagged', () => {
     const table: BasewaveTable = {
       name: 'mixed',
       columns: [{ id: 'c0', name: 'val', type: 'text' }],
       rows: [{ c0: '4' }, { c0: 'abc' }, { c0: '2.5' }, { c0: 'xyz' }, {}],
     };
     const next = setColumnType(table, 0, 'number');
-    expect(next.rows.map((r) => r.c0)).toEqual([4, 'abc', 2.5, 'xyz', undefined]);
+    expect(next.rows.map((r) => r.c0)).toEqual(['4', 'abc', '2.5', 'xyz', undefined]);
     // exactly the two non-convertible cells are flagged, so the Copy button stays disabled
     const errors = checkBasewaveTable(next);
     expect(errors).toHaveLength(2);
-    expect(errors.every((e) => e.includes('must be a finite number'))).toBe(true);
+    expect(errors[0]).toBe('Row 2, column val: not a valid Number value');
+    expect(errors[1]).toBe('Row 4, column val: not a valid Number value');
+    // the contract carries only the valid typed values
+    expect(tableToContract(next).rows).toEqual([{ val: 4 }, {}, { val: 2.5 }, {}, {}]);
     // switching back to Text restores the raw values exactly
     const back = setColumnType(next, 0, 'text');
     expect(back.rows.map((r) => r.c0)).toEqual(['4', 'abc', '2.5', 'xyz', undefined]);
     expect(checkBasewaveTable(back)).toEqual([]);
   });
 
-  it('number switched to Text stringifies, Boolean to Number gives 1 and 0', () => {
+  it('Boolean to Number derives 1/0 without touching the raw booleans, and back restores them', () => {
     const table = getSampleTable('recipes')!;
-    const si = table.columns.findIndex((c) => c.name === 'servings');
     const vi = table.columns.findIndex((c) => c.name === 'vegetarian');
-    let next = setColumnType(table, si, 'text');
-    expect(next.rows.map((r) => r[next.columns[si].id])).toEqual(['4', '2', '3', '6']);
-    next = setColumnType(next, vi, 'number');
-    expect(next.rows.map((r) => r[next.columns[vi].id])).toEqual([1, 1, 0, 1]);
+    const id = table.columns[vi].id;
+    let next = setColumnType(table, vi, 'number');
+    expect(next.rows.map((r) => r[id])).toEqual([true, true, false, true]); // raw untouched
+    expect(next.rows.every((r) => !isInvalidCell(r[id], 'number'))).toBe(true); // true/false derive 1/0
+    expect(tableToContract(next).rows.map((r) => r.vegetarian)).toEqual([1, 1, 0, 1]);
     expect(checkBasewaveTable(next)).toEqual([]);
+    next = setColumnType(next, vi, 'boolean');
+    expect(next.rows).toEqual(table.rows);
+    expect(tableToContract(next).rows.map((r) => r.vegetarian)).toEqual([true, true, false, true]);
+    expect(checkBasewaveTable(next)).toEqual([]);
+  });
+});
+
+describe('lossless type round trips (KJ #20 round 4)', () => {
+  it('every sample table, every column, every type pair A -> B -> A keeps the raw rows identical', () => {
+    for (const sample of SAMPLE_TABLES) {
+      const start = getSampleTable(sample.id)!;
+      for (let ci = 0; ci < start.columns.length; ci++) {
+        for (const a of COLUMN_TYPES) {
+          for (const b of COLUMN_TYPES) {
+            let t = setColumnType(start, ci, a);
+            t = setColumnType(t, ci, b);
+            t = setColumnType(t, ci, a);
+            expect(t.rows).toEqual(start.rows);
+            expect(t.columns[ci].type).toBe(a);
+          }
+        }
+      }
+    }
+  });
+
+  it('Boolean <-> Number on the vegetarian column is exact in both directions', () => {
+    const table = getSampleTable('recipes')!;
+    const vi = table.columns.findIndex((c) => c.name === 'vegetarian');
+    const id = table.columns[vi].id;
+    const asNumber = setColumnType(setColumnType(table, vi, 'number'), vi, 'boolean');
+    expect(asNumber.rows).toEqual(table.rows);
+    expect(asNumber.rows.every((r) => !isInvalidCell(r[id], 'boolean'))).toBe(true);
+    expect(checkBasewaveTable(asNumber)).toEqual([]);
+    // Number -> Boolean -> Number on a 1/0 column
+    const oneZero: BasewaveTable = {
+      name: 'flags',
+      columns: [{ id: 'c0', name: 'flag', type: 'number' }],
+      rows: [{ c0: 1 }, { c0: 0 }, { c0: 1 }],
+    };
+    const asBool = setColumnType(oneZero, 0, 'boolean');
+    expect(asBool.rows.map((r) => r.c0)).toEqual([1, 0, 1]); // raw untouched
+    expect(tableToContract(asBool).rows.map((r) => r.flag)).toEqual([true, false, true]); // 1/0 accepted
+    expect(checkBasewaveTable(asBool)).toEqual([]);
+    const back = setColumnType(setColumnType(asBool, 0, 'number'), 0, 'boolean');
+    expect(back.rows).toEqual(oneZero.rows);
+    expect(checkBasewaveTable(back)).toEqual([]);
+  });
+
+  it('edge strings 007, 1e3, " 42 ", whitespace-only and empty survive every type round trip', () => {
+    const start: BasewaveTable = {
+      name: 'edges',
+      columns: [{ id: 'c0', name: 'val', type: 'text' }],
+      rows: [{ c0: '007' }, { c0: '1e3' }, { c0: ' 42 ' }, { c0: '   ' }, { c0: '' }, {}],
+    };
+    for (const a of COLUMN_TYPES) {
+      for (const b of COLUMN_TYPES) {
+        let t = setColumnType(start, 0, a);
+        t = setColumnType(t, 0, b);
+        t = setColumnType(t, 0, a);
+        expect(t.rows).toEqual(start.rows);
+      }
+    }
+    // as Number: 007, 1e3 and " 42 " are invalid (kept raw, never rewritten); blank cells stay blank
+    const asNumber = setColumnType(start, 0, 'number');
+    expect(asNumber.rows.map((r) => isInvalidCell(r.c0, 'number'))).toEqual([true, true, true, false, false, false]);
+    expect(asNumber.rows.map((r) => r.c0)).toEqual(['007', '1e3', ' 42 ', '   ', '', undefined]);
+    expect(tableToContract(asNumber).rows).toEqual([{}, {}, {}, {}, {}, {}]);
+    expect(setColumnType(asNumber, 0, 'text').rows).toEqual(start.rows);
+    // as Boolean the same edge strings are invalid but kept; blank stays blank
+    const asBool = setColumnType(start, 0, 'boolean');
+    expect(asBool.rows.map((r) => isInvalidCell(r.c0, 'boolean'))).toEqual([true, true, true, false, false, false]);
+    expect(setColumnType(asBool, 0, 'text').rows).toEqual(start.rows);
+    // back to Text the table is clean again and the raw values are byte-identical (blank cells stay out of the contract)
+    const back = setColumnType(setColumnType(start, 0, 'number'), 0, 'text');
+    expect(back.rows).toEqual(start.rows);
+    expect(checkBasewaveTable(back)).toEqual([]);
+    expect(tableToContract(back).rows.map((r) => r.val)).toEqual(['007', '1e3', ' 42 ', undefined, undefined, undefined]);
+  });
+
+  it('editing a cell sets a new raw value; the typed value and invalid flag derive from it', () => {
+    let table = getSampleTable('recipes')!;
+    const si = table.columns.findIndex((c) => c.name === 'servings');
+    table = setCell(table, 0, si, '007');
+    expect(table.rows[0][table.columns[si].id]).toBe('007'); // raw entered text
+    expect(isInvalidCell('007', 'number')).toBe(true);
+    expect(checkBasewaveTable(table)).toEqual(['Row 1, column servings: not a valid Number value']);
+    // the invalid cell stays out of the contract output; the other cells still carry typed values
+    expect(tableToContract(table).rows[0]).toEqual({ title: 'Chickpea Curry', prepMinutes: 35, vegetarian: true, addedOn: '2026-09-14' });
+    // switching the type away and back never rewrites the raw edit
+    table = setColumnType(setColumnType(table, si, 'text'), si, 'number');
+    expect(table.rows[0][table.columns[si].id]).toBe('007');
   });
 });
 
@@ -322,12 +426,29 @@ describe('cell and column helpers key by id', () => {
     expect(checkBasewaveTable(table)).toEqual([]);
   });
 
-  it('coerceValue blanks what the type cannot represent', () => {
+  it('coerceValue derives the typed value, blanking what the type cannot represent', () => {
     expect(coerceValue('number', 'abc')).toBeUndefined();
     expect(coerceValue('number', '')).toBeUndefined();
     expect(coerceValue('number', '2.5')).toBe(2.5);
+    expect(coerceValue('number', '42')).toBe(42);
+    // a string is a number only when its own spelling survives the round trip
+    expect(coerceValue('number', '007')).toBeUndefined();
+    expect(coerceValue('number', '1e3')).toBeUndefined();
+    expect(coerceValue('number', ' 42 ')).toBeUndefined();
+    expect(coerceValue('number', true)).toBe(1);
+    expect(coerceValue('number', false)).toBe(0);
     expect(coerceValue('boolean', 'Chickpea Curry')).toBeUndefined();
     expect(coerceValue('boolean', 'true')).toBe(true);
+    // Boolean accepts true/false, 1/0 and "true"/"false" case-insensitively
+    expect(coerceValue('boolean', true)).toBe(true);
+    expect(coerceValue('boolean', false)).toBe(false);
+    expect(coerceValue('boolean', 1)).toBe(true);
+    expect(coerceValue('boolean', 0)).toBe(false);
+    expect(coerceValue('boolean', 'TRUE')).toBe(true);
+    expect(coerceValue('boolean', 'False')).toBe(false);
+    expect(coerceValue('boolean', '1')).toBe(true);
+    expect(coerceValue('boolean', '0')).toBe(false);
+    expect(coerceValue('boolean', 2)).toBeUndefined();
     expect(coerceValue('date', 'not a date')).toBeUndefined();
     expect(coerceValue('date', '2026-11-01')).toBe('2026-11-01');
     expect(coerceValue('text', 4)).toBe('4');

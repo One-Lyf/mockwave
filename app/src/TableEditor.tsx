@@ -10,7 +10,6 @@ import { useState } from 'react';
 import {
   addColumn,
   checkBasewaveTable,
-  coerceValue,
   COLUMN_LABELS,
   COLUMN_TYPES,
   isInvalidCell,
@@ -19,6 +18,7 @@ import {
   serializeTable,
   setCell,
   setColumnType,
+  typedCellValue,
   blankTable,
   getSampleTable,
   SAMPLE_TABLES,
@@ -33,8 +33,7 @@ interface Props {
   onClear: () => void;
 }
 
-function displayValue(value: unknown, type: ColumnType): string {
-  if (value === undefined || value === null) return '';
+function displayTyped(value: unknown, type: ColumnType): string {
   if (type === 'boolean') return value ? 'True' : 'False';
   return String(value);
 }
@@ -48,7 +47,8 @@ interface CellProps {
   onCommit: (v: unknown) => void;
 }
 
-/** One inline-editable cell: a button that opens an input on click or Enter. */
+/** One inline-editable cell: a button that opens an input on click or Enter. The cell keeps the
+ *  raw entered value; the shown text and the invalid flag are derived from it. */
 function Cell({ value, type, label, invalid, onCommit }: CellProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -58,13 +58,16 @@ function Cell({ value, type, label, invalid, onCommit }: CellProps) {
     setEditing(true);
   };
 
+  // Editing commits the raw entered text as the cell's new source of truth.
   const commit = () => {
-    onCommit(coerceValue(type, draft));
+    onCommit(draft === '' ? undefined : draft);
     setEditing(false);
   };
 
   if (!editing) {
-    const shown = displayValue(value, type);
+    const typed = typedCellValue(type, value);
+    const shown =
+      typed !== undefined ? displayTyped(typed, type) : value === undefined || value === null ? '' : String(value);
     return (
       <button
         type="button"
@@ -86,14 +89,15 @@ function Cell({ value, type, label, invalid, onCommit }: CellProps) {
   }
 
   if (type === 'boolean') {
+    const typed = typedCellValue(type, value);
     return (
       <select
         className="cell-input"
         aria-label={label}
         autoFocus
-        value={value === undefined || value === null ? '' : String(value)}
+        value={typed === undefined ? '' : String(typed)}
         onChange={(e) => {
-          onCommit(e.target.value === '' ? undefined : e.target.value === 'true');
+          onCommit(e.target.value === '' ? undefined : e.target.value);
           setEditing(false);
         }}
         onBlur={() => setEditing(false)}
@@ -158,6 +162,11 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
 
   const errors = checkBasewaveTable(table);
   const code = serializeTable(table);
+  // While any cell is invalid, the Contract Output shows the banner state, not the code.
+  const invalidCells = table.rows.reduce(
+    (n, row) => n + table.columns.filter((col) => isInvalidCell(row[col.id], col.type)).length,
+    0,
+  );
 
   const addRow = () => onChange({ ...table, rows: [...table.rows, {}] });
 
@@ -290,7 +299,16 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
       </p>
 
       <h3 className="output-heading">Contract Output</h3>
-      <pre className="code-output">{code}</pre>
+      {invalidCells > 0 ? (
+        <div className="error" role="alert">
+          <div>
+            {invalidCells} invalid cell{invalidCells === 1 ? '' : 's'}: the contract output is hidden until every
+            cell fits its column type. Edit the cell or switch the column type back to fix it.
+          </div>
+        </div>
+      ) : (
+        <pre className="code-output">{code}</pre>
+      )}
       <div className="copy-actions">
         <button type="button" className="btn" onClick={handleCopy} disabled={errors.length > 0}>
           {copied ? 'Copied' : 'Copy Table Code'}

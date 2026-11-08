@@ -116,19 +116,35 @@ export function renameColumn(table: BasewaveTable, ci: number, name: string): Ba
   return { ...table, columns: table.columns.map((c, i) => (i === ci ? { ...c, name } : c)) };
 }
 
-/** Coerce a value to a column type; undefined when the value cannot be represented. */
+/**
+ * Derive the typed value of a raw cell for a column type; undefined when the raw value is blank
+ * or cannot be represented (an invalid cell). A string only counts as a number when its own
+ * spelling survives the round trip (`String(Number(s)) === s`), so `007`, `1e3` and `" 42 "`
+ * are invalid as numbers, not silently rewritten. Boolean accepts true/false, 1/0 and
+ * "true"/"false"/"1"/"0" case-insensitively.
+ */
 export function coerceValue(type: ColumnType, value: unknown): unknown {
   if (value === undefined || value === null) return undefined;
   if (type === 'text') return String(value);
   if (typeof value === 'string' && value.trim() === '') return undefined;
   if (type === 'number') {
-    const n = typeof value === 'number' ? value : Number(value);
-    return Number.isFinite(n) ? n : undefined;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+    if (typeof value === 'boolean') return value ? 1 : 0;
+    if (typeof value === 'string') {
+      const n = Number(value);
+      return Number.isFinite(n) && String(n) === value ? n : undefined;
+    }
+    return undefined;
   }
   if (type === 'boolean') {
     if (typeof value === 'boolean') return value;
-    if (value === 'true') return true;
-    if (value === 'false') return false;
+    if (value === 1) return true;
+    if (value === 0) return false;
+    if (typeof value === 'string') {
+      const s = value.trim().toLowerCase();
+      if (s === 'true' || s === '1') return true;
+      if (s === 'false' || s === '0') return false;
+    }
     return undefined;
   }
   // date: keep ISO date strings, blank anything else
@@ -140,32 +156,30 @@ function isBlank(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
 }
 
-/** True when a present value does not fit the column's current type. The raw value is kept in
- *  the row (flagged invalid by checkBasewaveTable, so the banner counts it and Copy is disabled),
+/** True when a present value does not fit the column's current type. The raw value stays in the
+ *  row (flagged invalid by checkBasewaveTable, so the banner counts it and Copy is disabled),
  *  which is what makes switching the type back restore it exactly. */
 export function isInvalidCell(value: unknown, type: ColumnType): boolean {
   return !isBlank(value) && coerceValue(type, value) === undefined;
 }
 
-/** Change a column's type. Values that convert are converted; values that do not convert stay
- *  as the original raw value flagged invalid. No value is ever deleted by a type change, so
- *  switching back to the original type restores every value exactly. */
+/** The typed value a cell currently carries: undefined for a blank cell, the coerced value for a
+ *  valid one, and undefined for an invalid one (whose raw value the editor keeps as-is). */
+export function typedCellValue(type: ColumnType, raw: unknown): unknown {
+  if (isBlank(raw)) return undefined;
+  return coerceValue(type, raw);
+}
+
+/** Change a column's type. The raw entered value of every cell is the source of truth and is
+ *  never rewritten: a type change only re-derives each cell's typed value and invalid flag from
+ *  that raw value. So any chain of type changes (Boolean -> Number -> Boolean, Text -> Number ->
+ *  Text, ...) is exactly lossless, and no value is ever deleted by a type change. */
 export function setColumnType(table: BasewaveTable, ci: number, type: ColumnType): BasewaveTable {
   const col = table.columns[ci];
   if (!col || col.type === type) return table;
   return {
     ...table,
     columns: table.columns.map((c, i) => (i === ci ? { ...c, type } : c)),
-    rows: table.rows.map((row) => {
-      if (!(col.id in row)) return row;
-      const raw = row[col.id];
-      const v = coerceValue(type, raw);
-      const next = { ...row };
-      if (v !== undefined) next[col.id] = v;
-      else if (isBlank(raw)) delete next[col.id]; // a blank stays blank
-      // else: keep the raw value; it is flagged invalid until the type is switched back
-      return next;
-    }),
   };
 }
 
@@ -184,7 +198,8 @@ export function removeColumn(table: BasewaveTable, ci: number): BasewaveTable {
   };
 }
 
-/** Set one cell, keyed by the column's stable id. */
+/** Set one cell to a new raw entered value, keyed by the column's stable id. The typed value and
+ *  invalid flag are derived from this raw value, never stored separately. */
 export function setCell(table: BasewaveTable, ri: number, ci: number, value: unknown): BasewaveTable {
   const col = table.columns[ci];
   if (!col) return table;
@@ -200,7 +215,9 @@ export function setCell(table: BasewaveTable, ri: number, ci: number, value: unk
   };
 }
 
-/** Table -> contract: the column schema (name + type) with the rows, keyed by column name. */
+/** Table -> contract: the column schema (name + type) with the rows, keyed by column name.
+ *  Each cell contributes only its valid typed value; blank and invalid cells stay out of the
+ *  contract (an invalid cell is reported by checkBasewaveTable instead of leaking its raw value). */
 export function tableToContract(table: BasewaveTable): BasewaveContract {
   return {
     name: table.name,
@@ -208,8 +225,8 @@ export function tableToContract(table: BasewaveTable): BasewaveContract {
     rows: table.rows.map((row) => {
       const out: ReferenceRow = {};
       for (const col of table.columns) {
-        const v = row[col.id];
-        if (v !== undefined) out[col.name] = v;
+        const typed = typedCellValue(col.type, row[col.id]);
+        if (typed !== undefined) out[col.name] = typed;
       }
       return out;
     }),
@@ -274,7 +291,8 @@ export function parseTable(json: string): BasewaveTable {
   return table;
 }
 
-/** Returns every problem found; an empty list means the table serializes to a clean contract. */
+/** Returns every problem found; an empty list means the table serializes to a clean contract.
+ *  Rows are numbered from 1 in every message, matching the "Row 1" labels in the editor cells. */
 export function checkBasewaveTable(table: BasewaveTable): string[] {
   const errors: string[] = [];
   if (!table || typeof table.name !== 'string' || !NAME.test(table.name)) {
@@ -284,8 +302,22 @@ export function checkBasewaveTable(table: BasewaveTable): string[] {
     errors.push('table needs "columns" and "rows" lists');
     return errors;
   }
+  // An invalid cell keeps its raw value in the row; report it per cell, 1-based.
+  table.rows.forEach((row, ri) => {
+    table.columns.forEach((col, ci) => {
+      if (isInvalidCell(row[col.id], col.type)) {
+        errors.push(`Row ${ri + 1}, column ${col.name || ci + 1}: not a valid ${COLUMN_LABELS[col.type]} value`);
+      }
+    });
+  });
   const contract = tableToContract(table);
-  errors.push(...checkReferenceTable({ fields: contract.fields, rows: contract.rows }));
+  // The contract carries only valid typed values, so its remaining row errors are schema-level;
+  // renumber its 0-based "row n" prefixes to the same 1-based "Row n" the cells use.
+  errors.push(
+    ...checkReferenceTable({ fields: contract.fields, rows: contract.rows }).map((e) =>
+      e.replace(/^row (\d+)/, (_m, n) => `Row ${Number(n) + 1}`),
+    ),
+  );
   return errors;
 }
 
