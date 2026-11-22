@@ -4,7 +4,7 @@
       "name": "food",
       "scope": "user",
       "fields": [
-        { "name": "name", "type": "string" },
+        { "name": "name", "type": "string", "maxLength": 200 },
         { "name": "kcal", "type": "number" }
       ]
     },

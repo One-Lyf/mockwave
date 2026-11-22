@@ -5,15 +5,48 @@
  * `auth.users`. The output is a migration for Jeff to apply; nothing here runs it.
  */
 
-import { validateSchema, type FieldDef, type KitSchema } from './schema';
+import { DEFAULT_MAX_LENGTH, validateSchema, type EntityDef, type FieldDef, type KitSchema } from './schema';
 
 const SLUG = /^[a-z][a-z0-9_]*$/;
 const q = (name: string) => `"${name}"`;
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-function column(schema: string, f: FieldDef): string {
+/** Default ceiling on rows one user may hold per table, soft-deleted rows included (Ships F4). */
+export const DEFAULT_MAX_ROWS_PER_OWNER = 5000;
+
+export interface SqlOptions {
+  /** Length checks on string columns and a per-owner row cap. Default true; false reproduces the original 0001 shape. */
+  bounds?: boolean;
+  /** Rows one owner may hold per table. Default DEFAULT_MAX_ROWS_PER_OWNER. */
+  maxRowsPerOwner?: number;
+}
+
+const maxLen = (f: FieldDef) => f.maxLength ?? DEFAULT_MAX_LENGTH;
+const ident = (s: string) => s.slice(0, 63);
+const lenName = (e: EntityDef, f: FieldDef) => ident(`${e.name}_${f.name}_len`);
+const capFn = (e: EntityDef) => ident(`${e.name}_row_cap`);
+
+function rowCapFunction(s: string, e: EntityDef, max: number): string {
+  const t = `${s}.${q(e.name)}`;
+  // Advisory lock per (table, owner) serialises concurrent inserts so two requests cannot both pass the count.
+  // An insert that is really an upsert of an existing row (same id) is let through. Runs as the caller, so RLS applies.
+  return [
+    `create or replace function ${s}.${q(capFn(e))}() returns trigger language plpgsql as $f$`,
+    `begin`,
+    `  perform pg_advisory_xact_lock(hashtext(${lit(`${s.replace(/"/g, '')}.${e.name}`)}), hashtext(new."ownerId"::text));`,
+    `  if exists (select 1 from ${t} where id = new.id) then return new; end if;`,
+    `  if (select count(*) from ${t} where "ownerId" = new."ownerId") >= ${max} then`,
+    `    raise exception 'row limit reached for ${e.name} (max ${max} per user)' using errcode = '54000';`,
+    `  end if;`,
+    `  return new;`,
+    `end $f$;`,
+  ].join('\n');
+}
+
+function column(schema: string, f: FieldDef, bounds: boolean): string {
   const type = { string: 'text', number: 'double precision', boolean: 'boolean', date: 'timestamptz', enum: 'text', ref: 'uuid' }[f.type];
   let sql = `${q(f.name)} ${type}${f.optional ? '' : ' not null'}`;
+  if (f.type === 'string' && bounds) sql += ` check (char_length(${q(f.name)}) <= ${maxLen(f)})`;
   if (f.type === 'enum') sql += ` check (${q(f.name)} in (${f.enum!.map(lit).join(', ')}))`;
   // Composite key: a row may only point at a row with the same owner, so a ref cannot probe another user's ids.
   if (f.type === 'ref') sql += `,\n  foreign key (${q(f.name)}, "ownerId") references ${schema}.${q(f.to!)} (id, "ownerId")`;
@@ -21,7 +54,10 @@ function column(schema: string, f: FieldDef): string {
 }
 
 /** Returns the migration SQL that creates the app's schema, tables, grants and owner policies. */
-export function schemaToSql(app: string, schema: KitSchema): string {
+export function schemaToSql(app: string, schema: KitSchema, opts: SqlOptions = {}): string {
+  const bounds = opts.bounds ?? true;
+  const maxRows = opts.maxRowsPerOwner ?? DEFAULT_MAX_ROWS_PER_OWNER;
+  if (!Number.isInteger(maxRows) || maxRows < 1) throw new Error('schemaToSql: maxRowsPerOwner must be a positive whole number');
   if (!SLUG.test(app)) throw new Error(`schemaToSql: app slug "${app}" must match ${SLUG}`);
   const problems = validateSchema(schema, { signedIn: true });
   if (problems.length) throw new Error(`schemaToSql: invalid schema: ${problems.join('; ')}`);
@@ -42,7 +78,7 @@ export function schemaToSql(app: string, schema: KitSchema): string {
       `"createdAt" timestamptz not null`,
       `"updatedAt" timestamptz not null`,
       `"deletedAt" timestamptz`,
-      ...e.fields.map((f) => column(s, f)),
+      ...e.fields.map((f) => column(s, f, bounds)),
       `unique (id, "ownerId")`,
     ];
     out.push(
@@ -52,6 +88,39 @@ export function schemaToSql(app: string, schema: KitSchema): string {
       `alter table ${t} enable row level security;`,
       `create policy own_rows on ${t} for all to authenticated\n  using ("ownerId" = auth.uid()) with check ("ownerId" = auth.uid());`,
       `grant select, insert, update, delete on ${t} to authenticated;`,
+    );
+    if (bounds) {
+      out.push(rowCapFunction(s, e, maxRows), `create trigger row_cap before insert on ${t} for each row execute function ${s}.${q(capFn(e))}();`);
+    }
+  }
+  return out.join('\n') + '\n';
+}
+
+/**
+ * Migration that brings a stack created before the bounds existed (kitdemo 0001) up to what
+ * `schemaToSql` now generates. Idempotent. Check constraints are added NOT VALID: new and updated
+ * rows are checked, existing rows are not scanned or rejected, so it cannot fail on old data.
+ */
+export function schemaToHardeningSql(app: string, schema: KitSchema, opts: Omit<SqlOptions, 'bounds'> = {}): string {
+  const maxRows = opts.maxRowsPerOwner ?? DEFAULT_MAX_ROWS_PER_OWNER;
+  // Reuse the full generator for validation and its refusals; its output is discarded.
+  schemaToSql(app, schema, { maxRowsPerOwner: maxRows });
+  const s = q(app);
+  const out = [`-- Generated by basewave schemaToHardeningSql for app "${app}": length bounds and a per-owner row cap. Idempotent.`];
+  for (const e of schema.entities) {
+    const t = `${s}.${q(e.name)}`;
+    out.push('');
+    for (const f of e.fields.filter((x) => x.type === 'string')) {
+      const c = q(lenName(e, f));
+      out.push(
+        `alter table ${t} drop constraint if exists ${c};`,
+        `alter table ${t} add constraint ${c} check (char_length(${q(f.name)}) <= ${maxLen(f)}) not valid;`,
+      );
+    }
+    out.push(
+      rowCapFunction(s, e, maxRows),
+      `drop trigger if exists row_cap on ${t};`,
+      `create trigger row_cap before insert on ${t} for each row execute function ${s}.${q(capFn(e))}();`,
     );
   }
   return out.join('\n') + '\n';

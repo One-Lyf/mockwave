@@ -3,7 +3,7 @@ export * from './backend';
 export * from './store';
 export { deviceBackend } from './deviceBackend';
 export { stackBackend, type StackBackendOptions } from './stackBackend';
-export { schemaToSql } from './sql';
+export { schemaToSql, schemaToHardeningSql, DEFAULT_MAX_ROWS_PER_OWNER } from './sql';
 export * from '../blocks/referenceTable';
 export * from '../blocks/periodBucket';
 export * from '../blocks/settings';
