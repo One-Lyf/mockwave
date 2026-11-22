@@ -1,5 +1,5 @@
 /**
- * Mockwave: one-pass literal and comment scanner.
+ * Basewave: one-pass literal and comment scanner.
  *
  * Replaces the masking regexes, which went quadratic on adversarial pastes (many
  * unterminated `/*` or `"""`, each rescanning to the end). This walks the text once:

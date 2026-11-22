@@ -1,4 +1,4 @@
-# Scoping Memo: Mockwave Standalone Ship
+# Scoping Memo: Basewave Standalone Ship
 
 **Node:** `mockwave-standalone-ship`  
 **Owner:** whisperers  
@@ -9,7 +9,7 @@
 
 ## What
 
-Build Mockwave as a standalone application — the third member of the suite (Rackwave: audio, Fluxwave: UI, **Mockwave: data**). Mockwave applies the **copy-as-code pattern** to data mocking: import your real data schema, configure mocking rules, generate realistic mock data, and copy the generated code back into your project.
+Build Basewave as a standalone application — the third member of the suite (Rackwave: audio, Fluxwave: UI, **Basewave: data**). Basewave applies the **copy-as-code pattern** to data mocking: import your real data schema, configure mocking rules, generate realistic mock data, and copy the generated code back into your project.
 
 This node covers **scaffold-only** (first milestone per DISPATCH):
 - [x] Repository created (`github.com/One-Lyf/mockwave`)
@@ -25,13 +25,13 @@ Full standalone-ship parity with Rackwave/Fluxwave is a **later gate**, not this
 
 ## Why
 
-Jeff's live directive (2026-09-05): "Have Whisperers begin scaffolding Mockwave too." The suite has proven the copy-as-code pattern works:
+Jeff's live directive (2026-09-05): "Have Whisperers begin scaffolding Basewave too." The suite has proven the copy-as-code pattern works:
 
 - **Rackwave** (audio): import Web Audio code → tune → export patched code with only audio values changed
 - **Fluxwave** (UI): import UI code → edit → export patched code with only visual/behavioral values changed  
-- **Mockwave** (data): import data schema → configure mocks → export generated mock data that matches your structure
+- **Basewave** (data): import data schema → configure mocks → export generated mock data that matches your structure
 
-Mockwave completes the suite by applying the same pattern to data. Developers need realistic mock data for testing, prototyping, and development — Mockwave provides this with the same deterministic-first, AI-fallback approach as Rackwave.
+Basewave completes the suite by applying the same pattern to data. Developers need realistic mock data for testing, prototyping, and development — Basewave provides this with the same deterministic-first, AI-fallback approach as Rackwave.
 
 ---
 
@@ -226,7 +226,7 @@ Basic UI structure matching the suite pattern:
 **Rationale**:
 - Matches Rackwave's pattern (Code tab, Diff tab)
 - Users can copy directly into their projects
-- Diff helps understand what Mockwave generated
+- Diff helps understand what Basewave generated
 
 ---
 
@@ -287,7 +287,7 @@ Basic UI structure matching the suite pattern:
 |----------|---------|----------------|
 | Is parse-first, AI-fallback the right approach? | Yes / AI-first | **Yes** — matches proven Rackwave pattern |
 | Should we deepen parser before first release? | Yes / No | **No** — current coverage sufficient for MVP |
-| Should Mockwave UI match Rackwave/Fluxwave? | Yes / Custom | **Yes** — suite consistency |
+| Should Basewave UI match Rackwave/Fluxwave? | Yes / Custom | **Yes** — suite consistency |
 | How to handle custom/imported types? | Skip / AI / Extend parser | **AI fallback** — best balance |
 | Should mock generation be seeded/reproducible? | Yes / Random | **Yes** — for testing consistency |
 
@@ -339,7 +339,7 @@ From DISPATCH.md gate for `mockwave-standalone-ship`:
 - North star: `waves-first-revenue` (unblocks at scaffold stage)
 - Pattern origin: Rackwave PR #103 (parse-first, copy-as-code)
 - Sister node: `fluxwave-rackwave-parity-import-workflow` (same pattern applied to UI)
-- Unblocks: `waves-suite-liv-hat-rollout` (Mockwave needs Liv chat)
+- Unblocks: `waves-suite-liv-hat-rollout` (Basewave needs Liv chat)
 
 ---
 

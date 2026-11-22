@@ -3,7 +3,7 @@
  * first screen. A table is columns (name + type) plus rows.
  *
  * A table serializes to the kit ReferenceTable contract — `{ fields, rows }` — which is
- * the plain-data shape Fluxwave consumes as module data (SPEC-modular-apps: "Mockwave
+ * the plain-data shape Fluxwave consumes as module data (SPEC-modular-apps: "Basewave
  * supplies module data mocks"), so a Basewave table feeds Fluxwave through the contract
  * with no extra glue. The contract output carries the column schema (name + type) with
  * the rows.

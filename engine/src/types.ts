@@ -1,7 +1,7 @@
 /**
- * Mockwave Type Definitions
+ * Basewave Type Definitions
  * 
- * The canonical types for Mockwave's data mocking system.
+ * The canonical types for Basewave's data mocking system.
  * Mirrors the pattern from Rackwave (ChainState, DeviceState) and Fluxwave (UIDocument).
  */
 

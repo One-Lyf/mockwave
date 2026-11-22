@@ -1,8 +1,8 @@
 /**
- * Mockwave: Deterministic Data Schema Import
+ * Basewave: Deterministic Data Schema Import
  * 
- * The Mockwave hero, done deterministically (NO AI): bring your project's own
- * data schema/code into Mockwave, configure mocking rules, and get YOUR code
+ * The Basewave hero, done deterministically (NO AI): bring your project's own
+ * data schema/code into Basewave, configure mocking rules, and get YOUR code
  * back with only the mock values changed — so a plain diff shows exactly your edits.
  *
  * This module parses a pasted data schema (TypeScript interface, JSON Schema, etc.)

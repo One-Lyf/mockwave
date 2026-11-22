@@ -3,7 +3,7 @@
 //
 // Theme is not initialized here. main.tsx calls initTheme() for the standalone
 // app. The shell already sets [data-theme] on <html>, which index.css reads,
-// so a mounted Mockwave follows the shell instead of writing that attribute.
+// so a mounted Basewave follows the shell instead of writing that attribute.
 import App from './App';
 import './index.css';
 

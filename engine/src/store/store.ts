@@ -11,7 +11,7 @@
 import type { Row, StoreBackend } from './backend';
 import { SYSTEM_FIELDS, checkValue, validateSchema, type EntityDef, type KitSchema } from './schema';
 
-/** Same shape as fluxwave's `DataField` (packages/app-adapter), kept structural so Mockwave has no Fluxwave dependency. */
+/** Same shape as fluxwave's `DataField` (packages/app-adapter), kept structural so Basewave has no Fluxwave dependency. */
 export interface SurfaceField {
   path: string;
   label: string;
