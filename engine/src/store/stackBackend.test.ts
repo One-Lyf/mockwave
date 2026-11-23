@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { stackBackend } from './stackBackend';
+import { RowLimitError, stackBackend } from './stackBackend';
 
 function setup(responses: Array<{ status?: number; body?: unknown }> = [], token: string | null = 'tok', key = 'pub') {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -22,6 +22,22 @@ function setup(responses: Array<{ status?: number; body?: unknown }> = [], token
 const headers = (init: RequestInit) => init.headers as Record<string, string>;
 
 describe('stackBackend', () => {
+  it('turns the 400 row-cap refusal (code 54000) into a friendly RowLimitError', async () => {
+    const body = { code: '54000', message: 'row limit reached for food (max 5000 per user)', details: null, hint: 'Delete some rows to add new ones.' };
+    const { backend } = setup([{ status: 400, body }]);
+    const err = await backend.put('food', { id: 'a', createdAt: 't', updatedAt: 't' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RowLimitError);
+    expect((err as Error).message).toBe('Row Limit Reached. Delete Some Rows To Add New Ones.');
+    expect((err as RowLimitError).detail).toContain('max 5000');
+  });
+
+  it('keeps other 400s and a 500 as raw errors (a plain 54000 is no longer expected)', async () => {
+    const other = setup([{ status: 400, body: { code: '23514', message: 'check constraint' } }]);
+    await expect(other.backend.put('food', { id: 'a', createdAt: 't', updatedAt: 't' })).rejects.toThrow('failed (400)');
+    const five = setup([{ status: 500, body: { code: '54000', message: 'row limit reached' } }]);
+    await expect(five.backend.put('food', { id: 'a', createdAt: 't', updatedAt: 't' })).rejects.toThrow('failed (500)');
+  });
+
   const r = (id: string) => ({ id, createdAt: 't', updatedAt: 't' });
 
   it('reads through PostgREST with the session token and schema, paging until an empty page', async () => {

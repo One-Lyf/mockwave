@@ -14,7 +14,12 @@ export interface FieldDef {
   to?: string;
   /** A record may leave this field out. */
   optional?: boolean;
+  /** Longest allowed string, in characters. Generated SQL enforces it; defaults to DEFAULT_MAX_LENGTH. Strings only. */
+  maxLength?: number;
 }
+
+/** Cap on a generated `text` column when a string field sets no `maxLength` (Ships F4). */
+export const DEFAULT_MAX_LENGTH = 1000;
 
 /**
  * An action an entity declares beyond create, update and delete (SPEC-presets-and-kit 4.3, "each
@@ -81,6 +86,9 @@ export function validateSchema(schema: KitSchema, opts: SchemaCheckOptions = {})
       if (fields.has(f.name)) errors.push(`${at}: duplicate name`);
       fields.add(f.name);
       if (!FIELD_TYPES.includes(f.type)) errors.push(`${at}: unknown type "${f.type}"`);
+      if (f.maxLength !== undefined && (f.type !== 'string' || !Number.isInteger(f.maxLength) || f.maxLength < 1)) {
+        errors.push(`${at}: maxLength must be a positive whole number on a string field`);
+      }
       if (f.type === 'enum' && !f.enum?.length) errors.push(`${at}: enum needs values`);
       if (f.type === 'ref' && !(f.to && names.has(f.to))) errors.push(`${at}: ref to unknown entity "${f.to}"`);
     }

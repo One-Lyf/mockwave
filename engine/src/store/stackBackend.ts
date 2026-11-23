@@ -33,6 +33,24 @@ function isServiceKey(key: string): boolean {
   }
 }
 
+/** The stack refused a write because the user is at the per-owner row cap (Ships H-N1: HTTP 400, body code "54000"). */
+export class RowLimitError extends Error {
+  constructor(public readonly detail: string) {
+    super('Row Limit Reached. Delete Some Rows To Add New Ones.');
+    this.name = 'RowLimitError';
+  }
+}
+
+function isRowLimit(status: number, text: string): string | null {
+  if (status !== 400) return null;
+  try {
+    const b = JSON.parse(text) as { code?: unknown; message?: unknown };
+    return b.code === '54000' && typeof b.message === 'string' ? b.message : null;
+  } catch {
+    return null;
+  }
+}
+
 export function stackBackend(opts: StackBackendOptions): StoreBackend {
   // Clients only ever hold the publishable key; a service-role key would skip owner scoping.
   if (isServiceKey(opts.key)) throw new Error('stackBackend: refusing a service-role key; pass the publishable key');
@@ -54,10 +72,14 @@ export function stackBackend(opts: StackBackendOptions): StoreBackend {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`stackBackend: ${method} ${path} failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) {
+      const text = await res.text();
+      const limit = isRowLimit(res.status, text);
+      if (limit) throw new RowLimitError(limit);
+      throw new Error(`stackBackend: ${method} ${path} failed (${res.status}): ${text}`);
+    }
     return res;
   }
-
   const table = (entity: string) => encodeURIComponent(entity);
 
   return {
