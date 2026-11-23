@@ -51,4 +51,10 @@ describe('assertKitdemoKeySafe', () => {
   it('still allows an anon JWT wrapped in quotes', () => {
     expect(() => assertKitdemoKeySafe(`"${jwt('anon')}"`)).not.toThrow();
   });
+  it('rejects a service_role JWT with a backslash line-continuation in the payload', () => {
+    const [h, p, s] = jwt('service_role').split('.');
+    const broken = `${h}.${p.slice(0, 6)}\\\n${p.slice(6)}.${s}`;
+    expect(broken).toContain('\\\n');
+    expect(() => assertKitdemoKeySafe(broken)).toThrow(/service key/);
+  });
 });
