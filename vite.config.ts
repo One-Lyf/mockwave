@@ -1,7 +1,8 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 import { fileURLToPath } from 'node:url';
+import { assertKitdemoKeySafe } from './app/src/kitdemo/keyGuard';
 
 // This app's own deployed origin. The OneLyf shell loads remoteEntry.js and
 // this app's chunks inside the shell's page. Without an absolute `base`, Vite
@@ -16,7 +17,10 @@ const DEPLOYED_ORIGIN =
     ? `https://${process.env.VERCEL_URL}/`
     : 'https://mockwave.vercel.app/';
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  // Fail the build before a service key can be inlined into the public bundle.
+  assertKitdemoKeySafe(loadEnv(mode, 'app', 'VITE_').VITE_KITDEMO_STACK_KEY);
+  return {
   base: mode === 'production' ? DEPLOYED_ORIGIN : '/',
   plugins: [
     react(),
@@ -52,4 +56,5 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 3003,
   },
-}));
+};
+});
