@@ -1,7 +1,7 @@
 // Build-time guard: VITE_KITDEMO_STACK_KEY is inlined into the public bundle,
-// so it must never be a service key. The value is normalised first (all
-// whitespace and quote characters removed) so paste mistakes cannot hide a
-// key: wrapped quotes, a whole `NAME=value` line, whitespace inside a JWT.
+// so it must never be a service key. The value is normalised first (every character
+// outside base64url, `+/=` and dots is dropped) so paste mistakes cannot hide a
+// key: wrapped quotes, backslash continuations, a whole `NAME=value` line, whitespace inside a JWT.
 // Throws when `sb_secret_` appears anywhere, or when any dot-separated segment
 // decodes (base64url, signature never verified) to an object whose `role` is
 // present and not exactly `anon`. Empty, missing, publishable and anon pass.
@@ -19,7 +19,7 @@ function segmentRole(segment: string): unknown {
 }
 
 export function assertKitdemoKeySafe(key: string | undefined): void {
-  const k = (key ?? '').replace(/[\s"'`]+/g, '');
+  const k = (key ?? '').replace(/[^A-Za-z0-9_+/=.-]+/g, '');
   if (!k) return;
   const bad =
     k.includes('sb_secret_') ||
