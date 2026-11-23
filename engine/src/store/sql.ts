@@ -28,17 +28,28 @@ const capFn = (e: EntityDef) => ident(`${e.name}_row_cap`);
 
 function rowCapFunction(s: string, e: EntityDef, max: number): string {
   const t = `${s}.${q(e.name)}`;
+  const msg = `row limit reached for ${e.name} (max ${max} per user)`;
+  // Mirrors citadel kitdemo 0003 (H-N1). Invoker rights (no SECURITY DEFINER) and an empty search_path, so every
+  // built-in is schema-qualified: RLS shows the caller only their own rows, which are the rows being counted.
   // Advisory lock per (table, owner) serialises concurrent inserts so two requests cannot both pass the count.
-  // An insert that is really an upsert of an existing row (same id) is let through. Runs as the caller, so RLS applies.
+  // An insert that is really an upsert of an id the owner already has is let through at the cap.
+  // Refusal: PostgREST maps every SQLSTATE 54xxx to HTTP 500, so a plain errcode 54000 would be a 5xx. SQLSTATE 'PGRST'
+  // is PostgREST's custom error: message is JSON {code, message, details, hint}, detail is JSON {status, headers}.
+  // The client gets HTTP 400 with body {"code":"54000","message":"row limit reached ..."}.
   return [
-    `create or replace function ${s}.${q(capFn(e))}() returns trigger language plpgsql as $f$`,
+    `create or replace function ${s}.${q(capFn(e))}() returns trigger language plpgsql set search_path = '' as $f$`,
+    `declare`,
+    `  n bigint;`,
+    `  hit boolean;`,
     `begin`,
-    `  perform pg_advisory_xact_lock(hashtext(${lit(`${s.replace(/"/g, '')}.${e.name}`)}), hashtext(new."ownerId"::text));`,
-    `  if exists (select 1 from ${t} where id = new.id) then return new; end if;`,
-    `  if (select count(*) from ${t} where "ownerId" = new."ownerId") >= ${max} then`,
-    `    raise exception 'row limit reached for ${e.name} (max ${max} per user)' using errcode = '54000';`,
-    `  end if;`,
-    `  return new;`,
+    `  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${lit(`${s.replace(/"/g, '')}.${e.name}`)}), pg_catalog.hashtext(new."ownerId"::text));`,
+    `  select pg_catalog.count(*) into n from ${t} where "ownerId" = new."ownerId";`,
+    `  if n < ${max} then return new; end if;`,
+    `  select exists (select 1 from ${t} where id = new.id and "ownerId" = new."ownerId") into hit;`,
+    `  if hit then return new; end if;`,
+    `  raise sqlstate 'PGRST' using`,
+    `    message = pg_catalog.json_build_object('code', '54000', 'message', ${lit(msg)}, 'details', null, 'hint', 'Delete some rows to add new ones.')::text,`,
+    `    detail = pg_catalog.json_build_object('status', 400, 'headers', pg_catalog.json_build_object())::text;`,
     `end $f$;`,
   ].join('\n');
 }

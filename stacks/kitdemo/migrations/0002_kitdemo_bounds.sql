@@ -2,40 +2,55 @@
 
 alter table "kitdemo"."food" drop constraint if exists "food_name_len";
 alter table "kitdemo"."food" add constraint "food_name_len" check (char_length("name") <= 200) not valid;
-create or replace function "kitdemo"."food_row_cap"() returns trigger language plpgsql as $f$
+create or replace function "kitdemo"."food_row_cap"() returns trigger language plpgsql set search_path = '' as $f$
+declare
+  n bigint;
+  hit boolean;
 begin
-  perform pg_advisory_xact_lock(hashtext('kitdemo.food'), hashtext(new."ownerId"::text));
-  if exists (select 1 from "kitdemo"."food" where id = new.id) then return new; end if;
-  if (select count(*) from "kitdemo"."food" where "ownerId" = new."ownerId") >= 5000 then
-    raise exception 'row limit reached for food (max 5000 per user)' using errcode = '54000';
-  end if;
-  return new;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('kitdemo.food'), pg_catalog.hashtext(new."ownerId"::text));
+  select pg_catalog.count(*) into n from "kitdemo"."food" where "ownerId" = new."ownerId";
+  if n < 5000 then return new; end if;
+  select exists (select 1 from "kitdemo"."food" where id = new.id and "ownerId" = new."ownerId") into hit;
+  if hit then return new; end if;
+  raise sqlstate 'PGRST' using
+    message = pg_catalog.json_build_object('code', '54000', 'message', 'row limit reached for food (max 5000 per user)', 'details', null, 'hint', 'Delete some rows to add new ones.')::text,
+    detail = pg_catalog.json_build_object('status', 400, 'headers', pg_catalog.json_build_object())::text;
 end $f$;
 drop trigger if exists row_cap on "kitdemo"."food";
 create trigger row_cap before insert on "kitdemo"."food" for each row execute function "kitdemo"."food_row_cap"();
 
 alter table "kitdemo"."meal" drop constraint if exists "meal_note_len";
 alter table "kitdemo"."meal" add constraint "meal_note_len" check (char_length("note") <= 1000) not valid;
-create or replace function "kitdemo"."meal_row_cap"() returns trigger language plpgsql as $f$
+create or replace function "kitdemo"."meal_row_cap"() returns trigger language plpgsql set search_path = '' as $f$
+declare
+  n bigint;
+  hit boolean;
 begin
-  perform pg_advisory_xact_lock(hashtext('kitdemo.meal'), hashtext(new."ownerId"::text));
-  if exists (select 1 from "kitdemo"."meal" where id = new.id) then return new; end if;
-  if (select count(*) from "kitdemo"."meal" where "ownerId" = new."ownerId") >= 5000 then
-    raise exception 'row limit reached for meal (max 5000 per user)' using errcode = '54000';
-  end if;
-  return new;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('kitdemo.meal'), pg_catalog.hashtext(new."ownerId"::text));
+  select pg_catalog.count(*) into n from "kitdemo"."meal" where "ownerId" = new."ownerId";
+  if n < 5000 then return new; end if;
+  select exists (select 1 from "kitdemo"."meal" where id = new.id and "ownerId" = new."ownerId") into hit;
+  if hit then return new; end if;
+  raise sqlstate 'PGRST' using
+    message = pg_catalog.json_build_object('code', '54000', 'message', 'row limit reached for meal (max 5000 per user)', 'details', null, 'hint', 'Delete some rows to add new ones.')::text,
+    detail = pg_catalog.json_build_object('status', 400, 'headers', pg_catalog.json_build_object())::text;
 end $f$;
 drop trigger if exists row_cap on "kitdemo"."meal";
 create trigger row_cap before insert on "kitdemo"."meal" for each row execute function "kitdemo"."meal_row_cap"();
 
-create or replace function "kitdemo"."goal_row_cap"() returns trigger language plpgsql as $f$
+create or replace function "kitdemo"."goal_row_cap"() returns trigger language plpgsql set search_path = '' as $f$
+declare
+  n bigint;
+  hit boolean;
 begin
-  perform pg_advisory_xact_lock(hashtext('kitdemo.goal'), hashtext(new."ownerId"::text));
-  if exists (select 1 from "kitdemo"."goal" where id = new.id) then return new; end if;
-  if (select count(*) from "kitdemo"."goal" where "ownerId" = new."ownerId") >= 5000 then
-    raise exception 'row limit reached for goal (max 5000 per user)' using errcode = '54000';
-  end if;
-  return new;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext('kitdemo.goal'), pg_catalog.hashtext(new."ownerId"::text));
+  select pg_catalog.count(*) into n from "kitdemo"."goal" where "ownerId" = new."ownerId";
+  if n < 5000 then return new; end if;
+  select exists (select 1 from "kitdemo"."goal" where id = new.id and "ownerId" = new."ownerId") into hit;
+  if hit then return new; end if;
+  raise sqlstate 'PGRST' using
+    message = pg_catalog.json_build_object('code', '54000', 'message', 'row limit reached for goal (max 5000 per user)', 'details', null, 'hint', 'Delete some rows to add new ones.')::text,
+    detail = pg_catalog.json_build_object('status', 400, 'headers', pg_catalog.json_build_object())::text;
 end $f$;
 drop trigger if exists row_cap on "kitdemo"."goal";
 create trigger row_cap before insert on "kitdemo"."goal" for each row execute function "kitdemo"."goal_row_cap"();

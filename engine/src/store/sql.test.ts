@@ -51,9 +51,15 @@ describe('schemaToSql', () => {
     for (const t of ['food', 'meal', 'goal']) {
       expect(sql).toContain(`create trigger row_cap before insert on "kitdemo"."${t}"`);
     }
-    expect(sql).toContain('>= 42 then');
+    expect(sql).toContain('if n < 42 then');
     expect(sql).toContain('pg_advisory_xact_lock');
-    expect(schemaToSql('kitdemo', schema)).toContain('>= 5000 then');
+    // H-N1: PostgREST custom error (HTTP 400), invoker rights, empty search_path; never a plain 54000 (HTTP 500).
+    expect(sql).toContain(`raise sqlstate 'PGRST'`);
+    expect(sql).toContain(`'status', 400`);
+    expect(sql).toContain(`'code', '54000'`);
+    expect(sql).toContain(`set search_path = ''`);
+    expect(sql).not.toMatch(/security definer|errcode = '54000'/);
+    expect(schemaToSql('kitdemo', schema)).toContain('if n < 5000 then');
     expect(schemaToSql('kitdemo', schema, { bounds: false })).not.toMatch(/row_cap|char_length/);
     expect(() => schemaToSql('kitdemo', schema, { maxRowsPerOwner: 0 })).toThrow('maxRowsPerOwner');
   });
@@ -188,7 +194,10 @@ describe.skipIf(!pgBin)('owner scoping on the kitdemo migration (two users)', ()
     // Rebuild the triggers with a cap of 3 and fill user A's food table (already holds Oats + the 200-char row).
     psql(schemaToHardeningSql('kitdemo', schema, { maxRowsPerOwner: 3 }));
     as(A, food('10000000-0000-0000-0000-0000000000c3', 'Third'));
-    expect(fails(A, food('10000000-0000-0000-0000-0000000000c4', 'Fourth'))).toMatch(/row limit reached/);
+    // H-N1: the refusal is SQLSTATE PGRST (PostgREST answers HTTP 400 with code 54000), not a plain 54000 (HTTP 500).
+    const refused = fails(A, food('10000000-0000-0000-0000-0000000000c4', 'Fourth'));
+    expect(refused).toMatch(/row limit reached/);
+    expect(refused).toMatch(/"code"\s*:\s*"54000"/);
     // Upsert of an existing row still works at the cap; another user is unaffected.
     as(A, `${food(fA, 'Oats2')} on conflict (id) do update set name = excluded.name`);
     as(B, food('10000000-0000-0000-0000-0000000000b2', 'Beans'));
