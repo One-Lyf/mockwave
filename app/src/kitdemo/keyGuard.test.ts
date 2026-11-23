@@ -27,4 +27,28 @@ describe('assertKitdemoKeySafe', () => {
   it('ignores malformed JWT-shaped values', () => {
     expect(() => assertKitdemoKeySafe('a.!!!.c')).not.toThrow();
   });
+  it('rejects a service key wrapped in literal quotes', () => {
+    expect(() => assertKitdemoKeySafe(`"${jwt('service_role')}"`)).toThrow(/service key/);
+    expect(() => assertKitdemoKeySafe(`'sb_secret_FAKEFIXTURE'`)).toThrow(/service key/);
+  });
+  it('rejects a whole NAME=value line pasted as the value', () => {
+    expect(() =>
+      assertKitdemoKeySafe(`VITE_KITDEMO_STACK_KEY=${jwt('service_role')}`),
+    ).toThrow(/service key/);
+    expect(() =>
+      assertKitdemoKeySafe('VITE_KITDEMO_STACK_KEY=sb_secret_FAKEFIXTURE'),
+    ).toThrow(/service key/);
+  });
+  it('rejects a service_role JWT with whitespace inside the payload', () => {
+    const [h, p, s] = jwt('service_role').split('.');
+    const spaced = `${h}.${p.slice(0, 6)} \n ${p.slice(6)}.${s}`;
+    expect(() => assertKitdemoKeySafe(spaced)).toThrow(/service key/);
+  });
+  it('rejects non-anon roles such as postgres and supabase_admin', () => {
+    expect(() => assertKitdemoKeySafe(jwt('postgres'))).toThrow(/service key/);
+    expect(() => assertKitdemoKeySafe(jwt('supabase_admin'))).toThrow(/service key/);
+  });
+  it('still allows an anon JWT wrapped in quotes', () => {
+    expect(() => assertKitdemoKeySafe(`"${jwt('anon')}"`)).not.toThrow();
+  });
 });
