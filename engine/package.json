@@ -1,7 +1,7 @@
 {
   "name": "@mockwave/engine",
   "version": "0.0.1",
-  "description": "Mockwave core engine - deterministic data mocking with copy-as-code pattern",
+  "description": "Basewave core engine - deterministic data mocking with copy-as-code pattern",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

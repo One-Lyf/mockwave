@@ -1,5 +1,5 @@
 /**
- * Mockwave: GraphQL SDL import (deterministic, no AI).
+ * Basewave: GraphQL SDL import (deterministic, no AI).
  *
  * Reads `type` / `interface` / `input` definitions (plus `enum`, `union`, `scalar`
  * and `extend`) and maps the first object type to a mock configuration:

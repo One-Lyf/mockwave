@@ -1,5 +1,5 @@
 /**
- * Mockwave: Mock Data Generator
+ * Basewave: Mock Data Generator
  *
  * Generates realistic mock data from a schema configuration.
  * All randomness flows from one seeded PRNG (mulberry32), so the same `seed`

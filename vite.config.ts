@@ -7,7 +7,7 @@ import { assertKitdemoKeySafe } from './app/src/kitdemo/keyGuard';
 // This app's own deployed origin. The OneLyf shell loads remoteEntry.js and
 // this app's chunks inside the shell's page. Without an absolute `base`, Vite
 // emits relative asset URLs that resolve against the shell's origin and 404.
-// Production pins `base` to the Vercel project that actually serves Mockwave
+// Production pins `base` to the Vercel project that actually serves Basewave
 // (https://mockwave.vercel.app/). onelyf.net/mockwave is not rewritten, so a
 // base there returns the shell's HTML for every asset. Preview deploys pin
 // their own Vercel URL so a preview does not cross-load production assets.

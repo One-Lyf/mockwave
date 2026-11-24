@@ -1,5 +1,5 @@
 /**
- * Mockwave: Field-Name Heuristics
+ * Basewave: Field-Name Heuristics
  *
  * Realistic values from a field's NAME, shared by every import format (TypeScript,
  * JSON Schema, sample JSON, GraphQL). `classifyField('createdAt')` says "an ISO
