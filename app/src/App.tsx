@@ -13,9 +13,10 @@
  * parseSchema() detects the format, generateMock() fills it with mock values.
  */
 
-import { Component, useState, type ReactNode } from 'react';
+import { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { generateMock, parseSchema } from '../../engine/src';
 import type { BasewaveTable, SchemaImport, SchemaType } from '../../engine/src';
+import { openTableStorage, type TableStorage } from './tableStorage';
 import ThemeToggle from './ThemeToggle';
 import TableEditor from './TableEditor';
 
@@ -133,7 +134,60 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [runId, setRunId] = useState<number>(0);
-  const [table, setTable] = useState<BasewaveTable | null>(null);
+  // Device storage for tables, opened once. The last open table is restored on load so a
+  // reload brings the editor back to it (ui-1127 part 3).
+  const [session] = useState(() => {
+    const storage = openTableStorage();
+    const last = storage.getLastOpen();
+    return { storage, table: last?.table ?? null, id: last?.id ?? null, persistent: storage.persistent };
+  });
+  const storage: TableStorage = session.storage;
+  const [table, setTable] = useState<BasewaveTable | null>(session.table);
+  const tableIdRef = useRef<string | null>(session.id);
+  // 'saved' when the last autosave reached device storage, 'memory' when it only lives in
+  // memory for this session (private mode), which the editor shows as not saved on the device.
+  const [saveState, setSaveState] = useState<'saved' | 'memory'>(session.persistent ? 'saved' : 'memory');
+  // True when the open table has changes that are not on the device; only then a reload can
+  // lose work, so only then the beforeunload guard is installed.
+  const [unsaved, setUnsaved] = useState(false);
+
+  // Autosave every edit to the device and report whether the write landed there.
+  const persist = (t: BasewaveTable, id: string | null): string => {
+    const res = storage.save(t, id ?? undefined);
+    tableIdRef.current = res.id;
+    setSaveState(res.persistent ? 'saved' : 'memory');
+    setUnsaved(!res.persistent);
+    return res.id;
+  };
+
+  const handleLoadTable = (t: BasewaveTable) => {
+    persist(t, null);
+    setTable(t);
+  };
+
+  const handleChangeTable = (t: BasewaveTable) => {
+    persist(t, tableIdRef.current);
+    setTable(t);
+  };
+
+  // Closing the editor keeps the saved copy on the device; the TableEditor confirms first.
+  const handleClearTable = () => {
+    storage.setLastOpen(null);
+    tableIdRef.current = null;
+    setTable(null);
+    setUnsaved(false);
+  };
+
+  // Reload guard: only when there are unsaved (memory-only) changes.
+  useEffect(() => {
+    if (!unsaved) return;
+    const guard = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [unsaved]);
 
   const handleGenerateMock = () => {
     setError(null);
@@ -213,9 +267,10 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
       <main className="mockwave-main">
         <TableEditor
           table={table}
-          onLoad={setTable}
-          onChange={setTable}
-          onClear={() => setTable(null)}
+          onLoad={handleLoadTable}
+          onChange={handleChangeTable}
+          onClear={handleClearTable}
+          saveState={table ? saveState : null}
         />
 
         <section className="import-panel" aria-labelledby="import-heading">
