@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { openTableStorage, TABLES_STORAGE_KEY, type StoredTable } from './tableStorage';
+import { openTableStorage, TABLES_STORAGE_KEY, TABLES_BACKUP_PREFIX, type StoredTable } from './tableStorage';
 import type { BasewaveTable } from '../../engine/src';
 
 /** In-memory Storage stand-in. */
@@ -249,5 +249,134 @@ describe('tableStorage throwing storage (private mode)', () => {
     const s = openTableStorage({ storage: device });
     expect(s.loadAll()).toEqual([]);
     expect(s.getLastOpen()).toBeUndefined();
+  });
+});
+
+describe('tableStorage data-loss guards (unknown schema, future version, corrupt raw)', () => {
+  const keysOf = (s: Storage): string[] => {
+    const out: string[] = [];
+    for (let i = 0; i < s.length; i++) {
+      const k = s.key(i);
+      if (k !== null) out.push(k);
+    }
+    return out;
+  };
+  const backupKeysOf = (s: Storage): string[] => keysOf(s).filter((k) => k.startsWith(TABLES_BACKUP_PREFIX));
+  const backupValuesOf = (s: Storage): (string | null)[] => backupKeysOf(s).map((k) => s.getItem(k));
+
+  it('keeps a stored table with an unknown column type verbatim across a save, and backs up the raw payload', () => {
+    const device = new MemoryStorage();
+    // A column type this build does not know (added or renamed in a later build).
+    const futureEntry = {
+      id: 'future',
+      name: 'future',
+      updatedAt: '2026-11-27T09:00:00.000Z',
+      table: { name: 'future', columns: [{ id: 'c0', name: 'mood', type: 'emoji' }], rows: [{ c0: 'happy' }] },
+    };
+    const raw = JSON.stringify({ version: 1, lastOpenId: 'keep', tables: [stored('keep', 'recipes'), futureEntry] });
+    device.setItem(TABLES_STORAGE_KEY, raw);
+
+    const s = openTableStorage({ storage: device });
+    // This build cannot validate the future table, so it is not served...
+    expect(s.loadAll().map((t) => t.id)).toEqual(['keep']);
+
+    // ...but saving another table must not drop it from the device.
+    const res = s.save(makeTable('budget'));
+    expect(res.persistent).toBe(true);
+    const after = JSON.parse(device.getItem(TABLES_STORAGE_KEY)!);
+    expect(after.tables.find((t: { id?: string }) => t.id === 'future')).toEqual(futureEntry);
+    expect(after.tables.find((t: { id?: string }) => t.id === res.id)).toBeDefined();
+
+    // The original raw string is also backed up under a backup key.
+    expect(backupValuesOf(device)).toContain(raw);
+
+    // A fresh open still serves the valid table and preserves the future one on the next save.
+    const fresh = openTableStorage({ storage: device });
+    expect(fresh.loadAll().map((t) => t.id).sort()).toEqual(['keep', res.id].sort());
+    fresh.save(makeTable('again'), res.id);
+    const after2 = JSON.parse(device.getItem(TABLES_STORAGE_KEY)!);
+    expect(after2.tables.find((t: { id?: string }) => t.id === 'future')).toEqual(futureEntry);
+  });
+
+  it('preserves a duplicate-id entry verbatim instead of silently dropping it', () => {
+    const device = new MemoryStorage();
+    const dup = stored('dup', 'second copy', 'beta');
+    device.setItem(
+      TABLES_STORAGE_KEY,
+      JSON.stringify({ version: 1, lastOpenId: null, tables: [stored('dup', 'first', 'alpha'), dup] }),
+    );
+    const s = openTableStorage({ storage: device });
+    expect(s.loadAll()).toHaveLength(1); // first wins on the served view
+    s.save(makeTable('other'));
+    const after = JSON.parse(device.getItem(TABLES_STORAGE_KEY)!);
+    expect(after.tables).toContainEqual(dup);
+    expect(backupValuesOf(device).length).toBeGreaterThan(0); // dropped-from-view entries trigger a backup
+  });
+
+  it('refuses to write over an unknown (newer) version: stays in memory mode and never touches the original raw', () => {
+    const device = new MemoryStorage();
+    const v2raw = JSON.stringify({
+      version: 2,
+      lastOpenId: 'a',
+      tables: [stored('a', 'fromTheFuture', 'secret'), stored('b', 'alsoFuture')],
+    });
+    device.setItem(TABLES_STORAGE_KEY, v2raw);
+
+    const s = openTableStorage({ storage: device });
+    expect(s.persistent).toBe(false); // surfaces as "Not Saved on This Device"
+    expect(s.loadAll()).toEqual([]);
+
+    const res = s.save(makeTable('recipes'));
+    expect(res.persistent).toBe(false);
+    // The v2 payload on the device is byte-identical to what was there before.
+    expect(device.getItem(TABLES_STORAGE_KEY)).toBe(v2raw);
+    // ...and the raw was backed up.
+    expect(backupValuesOf(device)).toContain(v2raw);
+
+    // A fresh open (another tab / rollback) still sees the untouched v2 raw, still memory-only.
+    const fresh = openTableStorage({ storage: device });
+    expect(fresh.persistent).toBe(false);
+    expect(device.getItem(TABLES_STORAGE_KEY)).toBe(v2raw);
+  });
+
+  it('backs up a corrupt raw payload before the next save overwrites it', () => {
+    const device = new MemoryStorage();
+    const corrupt = '{"version":1,"tables":[{"id":"trun';
+    device.setItem(TABLES_STORAGE_KEY, corrupt);
+
+    const s = openTableStorage({ storage: device });
+    expect(s.loadAll()).toEqual([]);
+    const res = s.save(makeTable('recipes'));
+    expect(res.persistent).toBe(true);
+
+    // The new payload is readable after reload...
+    const fresh = openTableStorage({ storage: device });
+    expect(fresh.get(res.id)?.table.name).toBe('recipes');
+    // ...and the corrupt original survives in a backup key.
+    expect(backupValuesOf(device)).toContain(corrupt);
+  });
+
+  it('never overwrites an existing backup key (same-clock sessions get distinct keys)', () => {
+    const now = () => new Date(Date.UTC(2026, 10, 27, 12, 0, 0));
+    const device = new MemoryStorage();
+    device.setItem(TABLES_STORAGE_KEY, 'garbage{');
+    openTableStorage({ storage: device, now });
+    openTableStorage({ storage: device, now });
+    const backups = backupKeysOf(device);
+    expect(backups).toHaveLength(2);
+    expect(new Set(backups).size).toBe(2);
+    for (const k of backups) expect(device.getItem(k)).toBe('garbage{');
+  });
+
+  it('does not create a backup key when the stored payload is clean', () => {
+    const device = new MemoryStorage();
+    device.setItem(
+      TABLES_STORAGE_KEY,
+      JSON.stringify({ version: 1, lastOpenId: 'a', tables: [stored('a', 'recipes')] }),
+    );
+    const s = openTableStorage({ storage: device });
+    s.save(makeTable('budget'));
+    expect(backupKeysOf(device)).toEqual([]);
+    expect(JSON.parse(device.getItem(TABLES_STORAGE_KEY)!).tables).toHaveLength(2);
   });
 });
