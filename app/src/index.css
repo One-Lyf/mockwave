@@ -437,54 +437,182 @@ button:disabled {
   border-color: var(--accent);
 }
 
-/* The table scrolls in its own container, so the page never overflows horizontally. */
-.table-scroll {
+/* Columns are chips (name + type) in one horizontally scrollable strip; the strip scrolls
+   inside itself, so the page never overflows horizontally. Tapping a chip opens the sheet. */
+.col-chips {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-sm);
   overflow-x: auto;
   max-width: 100%;
+  padding-bottom: 2px;
+  margin-bottom: var(--space-md);
   -webkit-overflow-scrolling: touch;
-  border: 1px solid var(--surface-3);
-  border-radius: var(--radius-md);
+}
+
+.col-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 36px;
+  padding: var(--space-xs) var(--space-md);
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--edge);
+  color: var(--ink-1);
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.col-chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.col-chip-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.col-chip-type {
+  color: var(--ink-2);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.col-chip-add {
+  border-style: dashed;
+  color: var(--accent);
+  background: transparent;
+}
+
+/* Rows are compact cards in a wrapping grid, so a 390px screen never scrolls sideways. */
+.rows-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
   margin-bottom: var(--space-sm);
 }
 
-.data-table {
-  border-collapse: collapse;
+.row-card {
+  min-width: 0;
+  border: 1px solid var(--surface-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-1);
+  padding: var(--space-sm);
+}
+
+.row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.row-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.row-cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm);
+}
+
+@media (max-width: 379px) {
+  .row-cells {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.grid-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grid-cell-label {
+  font-size: 0.7rem;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-more {
+  margin-top: var(--space-sm);
+}
+
+/* Bottom sheet (column editor, row editor). Fixed to the viewport edges, so it never
+   widens the page; it scrolls its own content and clears the safe area at the bottom. */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sheet {
   width: 100%;
-  font-size: 0.85rem;
+  max-width: 560px;
+  max-height: 78vh;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border: 1px solid var(--edge);
+  border-bottom: none;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  padding: var(--space-lg);
+  padding-bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
 }
 
-.data-table th,
-.data-table td {
-  padding: var(--space-xs) var(--space-sm);
-  border-bottom: 1px solid var(--surface-3);
-  text-align: left;
-  vertical-align: top;
+.sheet-title {
+  font-size: 1rem;
+  margin-bottom: var(--space-md);
 }
 
-.data-table thead th {
-  min-width: 120px;
-  border-bottom: 2px solid var(--surface-3);
-  background: var(--surface-2);
-}
-
-/* The th stays a normal table cell (so headers align with their columns); the flex
-   column lives in the inner wrapper around the name input, type select and Remove. */
-.data-table th .th-inner {
+.sheet-field {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
-  align-items: stretch;
+  font-size: 0.8rem;
+  color: var(--ink-2);
+  margin-bottom: var(--space-md);
 }
 
-.row-actions-head {
-  min-width: 0;
-  /* Keeps the visually-hidden label's absolute box inside this cell, so a wide table
-     never leaks page-level horizontal scroll. */
-  position: relative;
+.sheet-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
 
-.row-actions {
-  white-space: nowrap;
+.sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+.btn-danger {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: transparent;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--sd-danger-bg);
 }
 
 .btn-sm {
@@ -579,15 +707,6 @@ button:disabled {
   font-weight: 400;
   color: var(--ink-2);
   font-size: 0.8rem;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
 }
 
 /* Responsive */
