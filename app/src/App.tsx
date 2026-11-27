@@ -14,7 +14,7 @@
  */
 
 import { Component, useState, type ReactNode } from 'react';
-import { generateMock, parseSchema } from '../../engine/src';
+import { generateMock, generateMockRows, parseSchema, toMockCode, DEFAULT_ROWS, MAX_ROWS } from '../../engine/src';
 import type { BasewaveTable, SchemaImport, SchemaType } from '../../engine/src';
 import ThemeToggle from './ThemeToggle';
 import TableEditor from './TableEditor';
@@ -117,14 +117,17 @@ class ResultBoundary extends Component<{ children: ReactNode }, { failed: boolea
   }
 }
 
-/** Render generated data as code in the shape of the pasted schema. */
+/** Render generated data as code in the shape of the pasted schema. TypeScript output is
+ *  typed against the source so it compiles when pasted back: date fields emit
+ *  new Date("...") for a `createdAt: Date`, and an object root emits an exported array
+ *  (`export const mockRecipe: Recipe[]`) with one entry per row. Other formats get plain
+ *  JSON, where dates stay ISO strings. */
 function toCode(imp: SchemaImport, data: unknown): string {
-  const json = JSON.stringify(data, null, 2);
-  if (imp.schemaType === 'typescript-interface' || imp.schemaType === 'typescript-type') {
-    const name = imp.config.name;
-    return `export const mock${name}: ${name} = ${json};\n`;
+  const isTs = imp.schemaType === 'typescript-interface' || imp.schemaType === 'typescript-type';
+  if (isTs) {
+    return toMockCode(String(imp.config.name), imp.config.root, data, imp.config.root.type === 'object');
   }
-  return `${json}\n`;
+  return `${JSON.stringify(data, null, 2)}\n`;
 }
 
 export default function App({ embedded = false }: { embedded?: boolean }) {
@@ -133,6 +136,7 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [runId, setRunId] = useState<number>(0);
+  const [rows, setRows] = useState<number>(DEFAULT_ROWS);
   const [table, setTable] = useState<BasewaveTable | null>(null);
 
   const handleGenerateMock = () => {
@@ -160,7 +164,11 @@ export default function App({ embedded = false }: { embedded?: boolean }) {
     }
 
     try {
-      const { data } = generateMock(imp.config);
+      const rowCount = Math.max(1, Math.min(MAX_ROWS, rows));
+      // Object roots emit one record per row; array roots take the row count as their length
+      const { data } = imp.config.root.type === 'object'
+        ? generateMockRows(imp.config, { rows: rowCount })
+        : generateMock(imp.config, { count: rowCount });
       setResult({
         code: toCode(imp, data),
         format: FORMAT_LABELS[imp.schemaType] ?? 'Schema',
@@ -280,6 +288,29 @@ interface User {
           />
 
           {error && <div className="error" role="alert">{error}</div>}
+
+          <div className="example-row" role="group" aria-label="Rows">
+            <span className="example-label">Rows</span>
+            <button
+              type="button"
+              className="btn"
+              aria-label="Fewer Rows"
+              disabled={rows <= 1}
+              onClick={() => setRows((n) => Math.max(1, n - 1))}
+            >
+              -
+            </button>
+            <span className="count" aria-live="polite">{rows}</span>
+            <button
+              type="button"
+              className="btn"
+              aria-label="More Rows"
+              disabled={rows >= MAX_ROWS}
+              onClick={() => setRows((n) => Math.min(MAX_ROWS, n + 1))}
+            >
+              +
+            </button>
+          </div>
 
           <div className="import-actions">
             <span className="count" aria-live="polite">
