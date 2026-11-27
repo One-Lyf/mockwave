@@ -95,13 +95,7 @@ interface Slot {
  * @returns Generated mock data
  */
 export function generateMock(config: MockConfig, options: MockOptions = {}): GeneratedMock {
-  const ref = options.referenceDate !== undefined ? new Date(options.referenceDate).getTime() : NaN;
-  const ctx: GenContext = {
-    rng: createRng(options.seed),
-    options,
-    now: Number.isFinite(ref) ? ref : hasSeed(options.seed) ? SEEDED_EPOCH : Date.now(),
-    budget: VALUE_BUDGET,
-  };
+  const ctx = createGenContext(options);
   const data = generateFromDefinition(config.root, ctx, 0, { name: config.name });
 
   return {
@@ -109,6 +103,51 @@ export function generateMock(config: MockConfig, options: MockOptions = {}): Gen
     config,
     generatedAt: new Date().toISOString(),
     source: config.root.type, // TODO: Store actual source
+  };
+}
+
+/** Default row count for generateMockRows (the app's Rows stepper starts here). */
+export const DEFAULT_ROWS = 5;
+/** Hard cap on rows per generation, so one click cannot explode the output. */
+export const MAX_ROWS = 100;
+
+/** Options for generateMockRows: MockOptions plus how many root records to emit. */
+export interface MockRowsOptions extends MockOptions {
+  /** How many root records to generate (default DEFAULT_ROWS, clamped to 1..MAX_ROWS). */
+  rows?: number;
+}
+
+/** Build the shared generation context (seeded rng, reference time, value budget). */
+function createGenContext(options: MockOptions): GenContext {
+  const ref = options.referenceDate !== undefined ? new Date(options.referenceDate).getTime() : NaN;
+  return {
+    rng: createRng(options.seed),
+    options,
+    now: Number.isFinite(ref) ? ref : hasSeed(options.seed) ? SEEDED_EPOCH : Date.now(),
+    budget: VALUE_BUDGET,
+  };
+}
+
+/**
+ * Generate several root records in one pass (the Rows stepper): each row is a fresh
+ * generateFromDefinition on the shared context, so people and values differ per row
+ * while a seed still reproduces the whole set. `data` is always an array, one entry
+ * per row.
+ */
+export function generateMockRows(config: MockConfig, options: MockRowsOptions = {}): GeneratedMock {
+  const requested = Math.floor(options.rows ?? DEFAULT_ROWS);
+  const rows = Number.isFinite(requested) ? Math.max(1, Math.min(MAX_ROWS, requested)) : DEFAULT_ROWS;
+  const ctx = createGenContext(options);
+  const data: unknown[] = [];
+  for (let i = 0; i < rows && ctx.budget > 0; i++) {
+    data.push(generateFromDefinition(config.root, ctx, 0, { name: config.name }));
+  }
+
+  return {
+    data,
+    config,
+    generatedAt: new Date().toISOString(),
+    source: config.root.type,
   };
 }
 
@@ -484,3 +523,72 @@ export const generators = {
   paragraph: withDefault(hints.paragraph),
   word: withDefault(hints.word),
 } as const;
+
+// -- TypeScript output ----------------------------------------------------------
+
+/**
+ * Serialize a generated value as a TypeScript literal that type-checks against the
+ * definition it came from: date fields become `new Date("...")` so a `createdAt: Date`
+ * field compiles, everything else is plain JSON (strings, numbers, booleans, null).
+ * `indent` is the nesting depth; output uses 2 spaces per level like JSON.stringify.
+ */
+export function toTypeScriptLiteral(definition: MockDefinition, value: unknown, indent = 0): string {
+  const pad = '  '.repeat(indent);
+  const innerPad = '  '.repeat(indent + 1);
+
+  switch (definition.type) {
+    case 'object': {
+      if (value === null || typeof value !== 'object') return 'null';
+      const def = definition as MockObjectDefinition;
+      const obj = value as Record<string, unknown>;
+      const keys = Object.keys(obj);
+      if (keys.length === 0) return '{}';
+      const lines = keys.map((key) => {
+        const prop = def.properties[key];
+        const childDef: MockDefinition = prop ? prop.mock : { type: 'any' };
+        return `${innerPad}${JSON.stringify(key)}: ${toTypeScriptLiteral(childDef, obj[key], indent + 1)}`;
+      });
+      return `{\n${lines.join(',\n')}\n${pad}}`;
+    }
+    case 'array': {
+      if (!Array.isArray(value) || value.length === 0) return '[]';
+      const def = definition as MockArrayDefinition;
+      const items = value.map((item) => `${innerPad}${toTypeScriptLiteral(def.itemType, item, indent + 1)}`);
+      return `[\n${items.join(',\n')}\n${pad}]`;
+    }
+    case 'record': {
+      if (value === null || typeof value !== 'object') return 'null';
+      const def = definition as MockRecordDefinition;
+      const keys = Object.keys(value as Record<string, unknown>);
+      if (keys.length === 0) return '{}';
+      const lines = keys.map(
+        (key) => `${innerPad}${JSON.stringify(key)}: ${toTypeScriptLiteral(def.valueType, (value as Record<string, unknown>)[key], indent + 1)}`,
+      );
+      return `{\n${lines.join(',\n')}\n${pad}}`;
+    }
+    default: {
+      const def = definition as MockPrimitiveDefinition;
+      if (def.type === 'date') {
+        if (value instanceof Date) return `new Date(${JSON.stringify(value.toISOString())})`;
+        if (typeof value === 'string') return `new Date(${JSON.stringify(value)})`;
+        if (typeof value === 'number' && Number.isFinite(value)) return `new Date(${value})`;
+        return 'null';
+      }
+      if (value === undefined) return 'undefined';
+      return JSON.stringify(value) ?? 'null';
+    }
+  }
+}
+
+/**
+ * The full copy-as-code statement for generated data. `asArray` (object roots) emits one
+ * exported array typed `Name[]` with an entry per row; otherwise the root literal is
+ * emitted as-is under `Name`. Date fields are `new Date(...)` either way.
+ */
+export function toMockCode(name: string, root: MockDefinition, data: unknown, asArray: boolean): string {
+  const type = asArray ? `${name}[]` : name;
+  const body = asArray && Array.isArray(data)
+    ? `[\n${data.map((row) => `  ${toTypeScriptLiteral(root, row, 1)}`).join(',\n')}\n]`
+    : toTypeScriptLiteral(root, data);
+  return `export const mock${name}: ${type} = ${body};\n`;
+}

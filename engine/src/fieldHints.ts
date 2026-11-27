@@ -93,6 +93,46 @@ const COMPANY_TAILS = ['Labs', 'Studio', 'Co.', 'Systems', 'Partners', 'Works', 
 const TITLE_ADJECTIVES = ['Quiet', 'Bright', 'Golden', 'Hidden', 'Simple', 'Modern', 'Wild', 'Gentle', 'Bold', 'Early', 'Open', 'Silver'];
 const TITLE_NOUNS = ['Harbor', 'Garden', 'Journey', 'Signal', 'Morning', 'Field', 'Bridge', 'Pattern', 'Window', 'River', 'Season', 'Kitchen'];
 const TITLE_TAILS = ['', '', ' Guide', ' Notes', ' Handbook', ' Report'];
+
+// Domain pools: the parent type's name (or the field's own words) says what a `title`
+// or `name` belongs to, so a Recipe title is a dish, not a generic headline.
+/** Canonical domain -> title pool. Keyed by the canonical word DOMAIN_WORDS maps to. */
+export const DOMAIN_TITLES: Record<string, readonly string[]> = {
+  recipe: ['Skillet Lasagna', 'Miso Glazed Salmon', 'Thai Green Curry', 'Margherita Pizza', 'Beef Stir Fry', 'Mushroom Risotto', 'Chicken Tacos', 'Lentil Vegetable Soup'],
+  product: ['Aurora Desk Lamp', 'Nomad Backpack', 'Pulse Water Bottle', 'Drift Wireless Charger', 'Halo Notebook Set', 'Terra Plant Pot', 'Echo Bluetooth Speaker', 'Atlas Desk Organizer'],
+  book: ['The Quiet Harbor', 'A Field Guide to Birds', 'The Last Lighthouse', 'Notes from the Andes', 'The Baker\'s Almanac', 'Wintering', 'The Cartographer\'s Daughter', 'Small Hours'],
+  movie: ['The Long Road Home', 'Midnight in Meridian', 'The Paper Kite', 'Echoes of June', 'The Last Ferry', 'North of Nowhere', 'A Summer of Static', 'The Glass Orchard'],
+  song: ['Slow Parade', 'Neon River', 'Golden Hour', 'Static Bloom', 'The Long Way Down', 'Paper Planes at Dawn', 'Midnight Parade', 'Low Tide'],
+  event: ['Spring Market Fair', 'Harvest Supper Club', 'Founders Meetup', 'Night Market', 'Charity 10K Run', 'Open Studio Night', 'Rooftop Cinema', 'Book Swap'],
+  project: ['Website Refresh', 'Mobile App Beta', 'Brand Guidelines', 'Onboarding Flow', 'Search Improvements', 'Pricing Page Test', 'Docs Restructure', 'Checkout Redesign'],
+  course: ['Intro to TypeScript', 'Everyday Cooking Basics', 'Photography Fundamentals', 'Personal Finance 101', 'Creative Writing Workshop', 'Data Analysis Starter', 'Public Speaking', 'Web Design Basics'],
+  game: ['Starlight Vale', 'Pixel Pioneers', 'Dungeon of Echoes', 'Rocket Ranch', 'Mystic Manor', 'Turbo Racers', 'Kingdom Hearts II', 'Cozy Crossing'],
+  article: ['Why Mock Data Matters', 'Designing for Small Screens', 'A Guide to Better Tests', 'The Case for Plain Text', 'Shipping Small, Shipping Often', 'Notes on Remote Work', 'What Makes a Good API', 'The Quiet Power of Defaults'],
+};
+/** Short blurbs for recipe-like records (a Recipe description reads like food, not a product blurb). */
+export const DOMAIN_DESCRIPTIONS: Record<string, readonly string[]> = {
+  recipe: [
+    'A weeknight favorite built from pantry staples.',
+    'Ready in under 30 minutes with one pan to wash.',
+    'Comfort food that reheats well for lunch the next day.',
+    'A lighter take on a classic, big on flavor.',
+    'Crowd-pleasing and easy to scale for guests.',
+    'Slow simmered until rich and deeply savory.',
+  ],
+};
+/** Every domain word (parent type name or field word) -> canonical domain key. */
+const DOMAIN_WORDS: Record<string, string> = {
+  recipe: 'recipe', recipes: 'recipe', dish: 'recipe', dishes: 'recipe', meal: 'recipe', meals: 'recipe', menu: 'recipe', food: 'recipe',
+  product: 'product', products: 'product', item: 'product', items: 'product',
+  book: 'book', books: 'book', novel: 'book', novels: 'book',
+  movie: 'movie', movies: 'movie', film: 'movie', films: 'movie',
+  song: 'song', songs: 'song', track: 'song', tracks: 'song', album: 'song',
+  event: 'event', events: 'event', conference: 'event', meetup: 'event', workshop: 'event',
+  project: 'project', projects: 'project', task: 'project', tasks: 'project',
+  course: 'course', courses: 'course', lesson: 'course', lessons: 'course',
+  game: 'game', games: 'game', match: 'game', matches: 'game',
+  article: 'article', articles: 'article', post: 'article', posts: 'article', story: 'article', blog: 'article',
+};
 const DESCRIPTIONS = [
   'A lightweight option for everyday use.',
   'Designed to be simple, durable, and easy to maintain.',
@@ -234,6 +274,14 @@ const COUNT_PARENTS = new Set(['page', 'pagination', 'paging', 'meta', 'metadata
 /** Generic root names (sample JSON is "Data", JSON Schema "Schema"): no context. */
 const GENERIC_PARENTS = new Set(['data', 'schema', 'root', 'record', 'row', 'entry', 'object', 'response', 'payload', 'body']);
 
+/** The domain a field lives in: the parent type's name first, then the field's own words
+ *  (Recipe.title and recipeName both land in the recipe domain). */
+function domainOf(parentTokens: string[], tokens: string[]): string | undefined {
+  for (const t of parentTokens) if (DOMAIN_WORDS[t]) return DOMAIN_WORDS[t];
+  for (const t of tokens) if (DOMAIN_WORDS[t]) return DOMAIN_WORDS[t];
+  return undefined;
+}
+
 /**
  * What a field name suggests, or null when it suggests nothing in particular.
  * Matching is word-based (camelCase/snake_case/kebab-case, plurals folded, trailing
@@ -256,6 +304,12 @@ export function classifyField(name: string, parent?: string): FieldHint | null {
   const isHead = (...w: string[]) => w.includes(head);
   // Whose person a name/email field describes: '' = this record's own, else the other party's words
   const role = tokens.filter((t) => !SELF_WORDS.has(t) && !PERSON_PARTS.has(t)).join('.');
+  // Domain context: the parent type's name or the field's own words say what a title or
+  // name belongs to (Recipe.title is a dish, Product.name a product), so it does not
+  // fall back to a generic headline. Person/company/file names still win (below).
+  const domain = domainOf(ptokens, tokens);
+  const domainTitle = domain ? DOMAIN_TITLES[domain] : undefined;
+  const domainBlurb = domain ? DOMAIN_DESCRIPTIONS[domain] : undefined;
 
   // Booleans: isX, hasX, canX, ... (and a few bare adjectives)
   if (!lone && BOOLEAN_PREFIXES.has(first)) return { natural: 'boolean' };
@@ -320,18 +374,18 @@ export function classifyField(name: string, parent?: string): FieldHint | null {
       if (parentIs(new Set(['city', 'town']))) return str(city);
       if (parentIs(new Set(['country']))) return str(country);
       if (parentIs(new Set(['file', 'attachment', 'document', 'upload']))) return str(fileName);
-      return str(title);
+      return str(domainTitle ? listOf(domainTitle) : title);
     }
     if (PERSON_NAME_PREFIXES.has(first)) return who(fullName, role, 'full');
     if (has('file')) return str(fileName);
-    return str(title);
+    return str(domainTitle ? listOf(domainTitle) : title);
   }
   if (isHead('author', 'assignee', 'recipient', 'sender')) return who(fullName, role, 'full');
 
   // Text
-  if (isHead('title', 'headline', 'subject', 'heading', 'caption', 'label')) return str(title);
+  if (isHead('title', 'headline', 'subject', 'heading', 'caption', 'label')) return str(domainTitle ? listOf(domainTitle) : title);
   if (isHead('bio', 'about', 'tagline')) return str(bio);
-  if (isHead('description', 'summary', 'excerpt', 'overview', 'message', 'comment', 'note', 'reason')) return str(description);
+  if (isHead('description', 'summary', 'excerpt', 'overview', 'message', 'comment', 'note', 'reason')) return str(domainBlurb ? listOf(domainBlurb) : description);
   if (isHead('body', 'content', 'text')) return str(paragraph);
   if (head === 'slug') return str(slug);
 
