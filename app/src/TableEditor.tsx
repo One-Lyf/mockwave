@@ -31,6 +31,8 @@ interface Props {
   onLoad: (t: BasewaveTable) => void;
   onChange: (t: BasewaveTable) => void;
   onClear: () => void;
+  /** Autosave result for the open table: 'saved' on the device, 'memory' only for this session. */
+  saveState: 'saved' | 'memory' | null;
 }
 
 function displayTyped(value: unknown, type: ColumnType): string {
@@ -132,8 +134,10 @@ function Cell({ value, type, label, invalid, onCommit }: CellProps) {
   );
 }
 
-export default function TableEditor({ table, onLoad, onChange, onClear }: Props) {
+export default function TableEditor({ table, onLoad, onChange, onClear, saveState }: Props) {
   const [copied, setCopied] = useState(false);
+  // Close Table asks first: nothing is ever discarded without a confirm.
+  const [confirmingClose, setConfirmingClose] = useState(false);
 
   if (!table) {
     return (
@@ -201,9 +205,38 @@ export default function TableEditor({ table, onLoad, onChange, onClear }: Props)
         <button type="button" className="btn" onClick={addRow}>
           Add Row
         </button>
-        <button type="button" className="btn" onClick={onClear}>
-          Close Table
-        </button>
+        {confirmingClose ? (
+          <div className="confirm-row" role="group" aria-label="Confirm closing the table">
+            <span className="confirm-note">
+              {saveState === 'memory'
+                ? 'Close this table? It is not saved on this device and will be lost.'
+                : 'Close this table? Your edits are saved on this device.'}
+            </span>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => {
+                setConfirmingClose(false);
+                onClear();
+              }}
+            >
+              Confirm Close
+            </button>
+            <button type="button" className="btn" onClick={() => setConfirmingClose(false)}>
+              Keep Editing
+            </button>
+          </div>
+        ) : (
+          <button type="button" className="btn" onClick={() => setConfirmingClose(true)}>
+            Close Table
+          </button>
+        )}
+        <span
+          className={saveState === 'memory' ? 'save-state save-state-unsaved' : 'save-state'}
+          aria-live="polite"
+        >
+          {saveState === 'memory' ? 'Not Saved on This Device' : 'Saved'}
+        </span>
       </div>
 
       {errors.length > 0 && (
